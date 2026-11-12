@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat"
+        android:shortcutId="quick_add"
+        android:shortcutLongLabel="@string/quick_add_long"
+        android:shortcutShortLabel="@string/quick_add">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.thor1or.dayloop.ui.QuickAddActivity"
+            android:targetPackage="com.thor1or.dayloop" />
+    </shortcut>
+</shortcuts>

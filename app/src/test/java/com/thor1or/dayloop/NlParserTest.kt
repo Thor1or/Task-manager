@@ -1,0 +1,131 @@
+package com.thor1or.dayloop
+
+import com.thor1or.dayloop.logic.DateOrder
+import com.thor1or.dayloop.logic.NlParser
+import com.thor1or.dayloop.logic.Recurrence
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import java.time.LocalDate
+import java.time.LocalTime
+
+class NlParserTest {
+    // A Thursday.
+    private val today = LocalDate.of(2026, 11, 12)
+    private val now = LocalTime.of(10, 0)
+    private fun p(s: String, order: DateOrder = DateOrder.DMY) = NlParser.parse(s, today, now, order)
+
+    @Test fun theExampleFromTheBrief() {
+        val r = p("buy bread at 9am on 10/12")
+        assertEquals("buy bread", r.title)
+        assertEquals(LocalDate.of(2026, 12, 10), r.date)
+        assertEquals(LocalTime.of(9, 0), r.time)
+    }
+
+    @Test fun monthFirstOrder() {
+        val r = p("buy bread at 9am on 10/12", DateOrder.MDY)
+        // 12 October has passed, so next year's is meant.
+        assertEquals(LocalDate.of(2027, 10, 12), r.date)
+    }
+
+    @Test fun plainTitleHasNoSchedule() {
+        val r = p("think about the sun and the 3 body problem")
+        assertEquals("think about the sun and the 3 body problem", r.title)
+        assertNull(r.date); assertNull(r.time); assertNull(r.durationMin)
+    }
+
+    @Test fun timeOnlyPicksTodayOrTomorrow() {
+        assertEquals(today, p("call bank 14:30").date)
+        assertEquals(today.plusDays(1), p("call bank 9am").date)
+        assertEquals(LocalTime.of(21, 15), p("movie 9:15pm").time)
+        assertEquals(LocalTime.of(12, 0), p("lunch at noon").time)
+        assertEquals(LocalTime.of(0, 30), p("x 12:30am").time)
+    }
+
+    @Test fun relativeDates() {
+        assertEquals(today.plusDays(1), p("dentist tomorrow").date)
+        assertEquals(today, p("dentist today").date)
+        assertEquals(today.plusDays(3), p("dentist in 3 days").date)
+        assertEquals(today.plusWeeks(2), p("dentist in 2 weeks").date)
+        assertEquals(LocalDate.of(2026, 11, 16), p("report monday").date)
+        assertEquals(LocalDate.of(2026, 11, 19), p("report next thu").date)
+        assertEquals(LocalDate.of(2026, 11, 13), p("report on fri").date)
+    }
+
+    @Test fun namedMonths() {
+        assertEquals(LocalDate.of(2026, 12, 25), p("gifts dec 25").date)
+        assertEquals(LocalDate.of(2027, 3, 3), p("gifts 3rd of march").date)
+        assertEquals(LocalDate.of(2028, 1, 5), p("trip 5 jan 2028").date)
+        assertEquals(LocalDate.of(2027, 2, 1), p("trip 2027-02-01").date)
+        assertEquals("may call later", p("may call later").title)
+    }
+
+    @Test fun durationsAndGroups() {
+        val r = p("deep work tomorrow 9am for 90m #Work")
+        assertEquals("deep work", r.title)
+        assertEquals(90, r.durationMin)
+        assertEquals("Work", r.group)
+        assertEquals(45, p("read 45min").durationMin)
+        assertEquals(90, p("read 1h30m").durationMin)
+        assertEquals(120, p("read for 2h").durationMin)
+        assertEquals(150, p("read 2.5 hours").durationMin)
+    }
+
+    @Test fun durationAndTimeTogether() {
+        val r = p("lunch at 12:30 for 45m")
+        assertEquals(LocalTime.of(12, 30), r.time)
+        assertEquals(45, r.durationMin)
+        assertEquals("lunch", r.title)
+    }
+
+    @Test fun recurrence() {
+        assertEquals(Recurrence(Recurrence.Kind.DAILY), p("vitamins every day 8am").recurrence)
+        assertEquals(today.plusDays(1), p("vitamins every day 8am").date)
+        val g = p("gym every mon, wed 7am")
+        assertEquals(Recurrence(Recurrence.Kind.WEEKLY, 0b101), g.recurrence)
+        assertEquals(LocalDate.of(2026, 11, 16), g.date)
+        assertEquals("gym", g.title)
+        assertEquals(Recurrence(Recurrence.Kind.WEEKDAYS), p("standup every weekday").recurrence)
+        assertEquals(Recurrence(Recurrence.Kind.WEEKLY, 1 shl 3), p("review weekly").recurrence)
+        assertEquals(Recurrence(Recurrence.Kind.MONTHLY), p("rent monthly on 5/12").recurrence)
+    }
+
+    @Test fun portuguese() {
+        val r = p("comprar pão amanhã às 9h")
+        assertEquals("comprar pão", r.title)
+        assertEquals(today.plusDays(1), r.date)
+        assertEquals(LocalTime.of(9, 0), r.time)
+        assertEquals(LocalTime.of(14, 30), p("reunião 14h30").time)
+        assertEquals(LocalDate.of(2026, 11, 13), p("mercado sexta").date)
+    }
+
+    @Test fun spansCoverWhatWasUnderstood() {
+        val s = "buy bread at 9am on 10/12"
+        val r = p(s)
+        assertEquals(listOf("at 9am", "on 10/12"), r.spans.map { s.substring(it) })
+    }
+
+    @Test fun formatRoundTrips() {
+        for (order in DateOrder.values()) {
+            val rec = Recurrence(Recurrence.Kind.WEEKLY, 0b1010)
+            val text = NlParser.format(LocalDate.of(2027, 3, 4), 9 * 60 + 5, 75, rec, order)
+            val r = p(text, order)
+            assertEquals("", r.title)
+            assertEquals(LocalDate.of(2027, 3, 4), r.date)
+            assertEquals(LocalTime.of(9, 5), r.time)
+            assertEquals(75, r.durationMin)
+            assertEquals(rec, r.recurrence)
+        }
+    }
+
+    @Test fun clockAndDurationFields() {
+        assertEquals(9 * 60, NlParser.parseClock("9am"))
+        assertEquals(14 * 60 + 30, NlParser.parseClock("14:30"))
+        assertEquals(7 * 60, NlParser.parseClock("7"))
+        assertNull(NlParser.parseClock("soon"))
+        assertEquals(30, NlParser.parseDuration("30"))
+        assertEquals(90, NlParser.parseDuration("1h30m"))
+        assertEquals(120, NlParser.parseDuration("2h"))
+        assertEquals("1h30m", NlParser.formatDuration(90))
+    }
+}
