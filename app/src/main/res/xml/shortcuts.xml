@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_note"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/shortcut_new_note">
+        <intent
+            android:action="com.jotter.notes.NEW_NOTE"
+            android:targetClass="com.jotter.notes.MainActivity"
+            android:targetPackage="com.jotter.notes" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="new_list"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/shortcut_new_list">
+        <intent
+            android:action="com.jotter.notes.NEW_LIST"
+            android:targetClass="com.jotter.notes.MainActivity"
+            android:targetPackage="com.jotter.notes" />
+    </shortcut>
+</shortcuts>

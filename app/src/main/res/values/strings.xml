@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Jotter</string>
+    <string name="shortcut_new_note">New note</string>
+    <string name="shortcut_new_list">New list</string>
+</resources>
