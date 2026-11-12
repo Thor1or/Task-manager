@@ -210,6 +210,62 @@ class AppFlowTest {
     }
 
     @Test
+    fun checklist_indentSubItems() {
+        waitForText("Notes you add appear here")
+        click("New list")
+        rule.onNodeWithTag("title").performTextInput("Shopping")
+        rule.onAllNodesWithTag("item").onFirst().performTextInput("Fruit\nApples\nPears\nBakery")
+        fun saved() = note("Shopping")?.sortedItems.orEmpty().map { Triple(it.text, it.indent, it.checked) }
+
+        // The first item has nothing to nest under, so it offers no indent button.
+        rule.onNode(hasTestTag("item") and hasText("Fruit")).performClick()
+        rule.onAllNodes(hasContentDescription("Indent")).assertCountEquals(0)
+
+        rule.onNode(hasTestTag("item") and hasText("Apples")).performClick()
+        click("Indent")
+        rule.onNode(hasTestTag("item") and hasText("Pears")).performClick()
+        click("Indent")
+        rule.onNode(hasTestTag("item") and hasText("Bakery")).performClick()
+        click("Indent")
+        click("Remove indent")
+        waitFor("indents saved") {
+            saved() == listOf(Triple("Fruit", 0, false), Triple("Apples", 1, false), Triple("Pears", 1, false), Triple("Bakery", 0, false))
+        }
+        shot("12-indented-list")
+
+        // Ticking the parent ticks its sub-items, but not the next top-level item.
+        rule.onAllNodes(isToggleable()).onFirst().performClick()
+        rule.onNodeWithText("3 checked items").assertIsDisplayed()
+        // Unticking one sub-item unticks the parent; the other sub-item stays done.
+        rule.onAllNodes(isToggleable())[2].performClick()
+        waitFor("check states saved") {
+            saved().map { it.first to it.third } == listOf("Fruit" to false, "Apples" to false, "Pears" to true, "Bakery" to false)
+        }
+
+        // Indentation is part of undo history.
+        rule.onNode(hasTestTag("item") and hasText("Apples")).performClick()
+        click("Remove indent")
+        click("Undo")
+        click("Navigate up")
+        waitForText("Shopping")
+        waitFor("still indented after undo") { saved().map { it.second } == listOf(0, 1, 1, 0) }
+
+        // List -> text -> list keeps the nesting.
+        rule.onNodeWithText("Shopping").performClick()
+        click("Add")
+        rule.onNodeWithText("Hide checkboxes").performClick()
+        waitFor("text form") { note("Shopping")?.note?.content == "Fruit\n  Apples\n  Pears\nBakery" }
+        click("Add")
+        rule.onNodeWithText("Checkboxes").performClick()
+        waitFor("back to a nested list") { saved().map { it.first to it.second } == listOf("Fruit" to 0, "Apples" to 1, "Pears" to 1, "Bakery" to 0) }
+
+        // Deleting the first item promotes the sub-item that is now on top.
+        rule.onNode(hasTestTag("item") and hasText("Fruit")).performClick()
+        click("Delete item")
+        waitFor("orphan promoted") { saved().map { it.first to it.second } == listOf("Apples" to 0, "Pears" to 1, "Bakery" to 0) }
+    }
+
+    @Test
     fun search_select_archive_trash_restore() {
         seed(Note(title = "Trip plan", content = "Book flights", color = 3, pinned = true))
         seed(Note(title = "Groceries", isChecklist = true, color = 4), "Milk", "Eggs", "Bread")

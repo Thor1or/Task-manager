@@ -1,5 +1,6 @@
 package com.jotter.notes.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
@@ -52,6 +53,8 @@ data class ChecklistItem(
     val text: String,
     val checked: Boolean = false,
     val position: Int = 0,
+    /** 0 for a top-level item, 1 for a sub-item nested under the item above it. */
+    @ColumnInfo(defaultValue = "0") val indent: Int = 0,
 )
 
 @Entity(tableName = "labels", indices = [Index(value = ["name"], unique = true)])
@@ -111,7 +114,7 @@ data class NoteWithDetails(
 
     /** Plain-text rendering used for sharing and for converting a list back to text. */
     fun bodyAsText(): String =
-        if (note.isChecklist) sortedItems.joinToString("\n") { (if (it.checked) "[x] " else "[ ] ") + it.text }
+        if (note.isChecklist) sortedItems.joinToString("\n") { "  ".repeat(it.indent) + (if (it.checked) "[x] " else "[ ] ") + it.text }
         else note.content
 
     fun matches(query: String): Boolean {

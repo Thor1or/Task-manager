@@ -32,7 +32,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-data class EditorItem(val key: Long, val text: String, val checked: Boolean = false)
+data class EditorItem(val key: Long, val text: String, val checked: Boolean = false, val indent: Int = 0) {
+    val isChild get() = indent > 0
+}
+
+/** The first item has nothing above it to nest under, so it is always top level. */
+private fun List<EditorItem>.normalized(): List<EditorItem> =
+    if (firstOrNull()?.isChild == true) mapIndexed { i, it -> if (i == 0) it.copy(indent = 0) else it } else this
 
 data class EditorState(
     val loaded: Boolean = false,
@@ -64,7 +70,7 @@ data class EditorState(
 
     fun shareText(): String = buildString {
         if (title.isNotBlank()) appendLine(title)
-        if (isChecklist) items.forEach { appendLine((if (it.checked) "[x] " else "[ ] ") + it.text) }
+        if (isChecklist) items.forEach { appendLine("  ".repeat(it.indent) + (if (it.checked) "[x] " else "[ ] ") + it.text) }
         else append(content)
     }.trim()
 
@@ -120,7 +126,7 @@ class EditorViewModel(
             val n = d.note
             state = EditorState(
                 loaded = true, id = n.id, title = n.title, content = n.content, isChecklist = n.isChecklist,
-                items = d.sortedItems.map { EditorItem(nextKey++, it.text, it.checked) },
+                items = d.sortedItems.map { EditorItem(nextKey++, it.text, it.checked, it.indent.coerceIn(0, 1)) }.normalized(),
                 color = n.color, pinned = n.pinned, archived = n.archived, trashed = n.trashedAt != null,
                 reminderAt = n.reminderAt, reminderRepeat = Repeat.of(n.reminderRepeat),
                 labels = d.sortedLabels, images = d.sortedImages,
@@ -183,7 +189,7 @@ class EditorViewModel(
                 reminderAt = s.reminderAt, reminderRepeat = s.reminderRepeat.name,
                 createdAt = createdAt, updatedAt = updatedAt,
             ),
-            if (s.isChecklist) s.items.map { ChecklistItem(noteId = s.id, text = it.text, checked = it.checked) } else emptyList(),
+            if (s.isChecklist) s.items.map { ChecklistItem(noteId = s.id, text = it.text, checked = it.checked, indent = it.indent) } else emptyList(),
         )
         state = state.copy(id = id, createdAt = createdAt, updatedAt = updatedAt)
         if (s.id == 0L) {
@@ -276,7 +282,7 @@ class EditorViewModel(
         change(coalesce = false) { s ->
             val index = s.items.indexOfFirst { it.key == key }
             val current = s.items[index]
-            val added = parts.drop(1).map { EditorItem(nextKey++, it, current.checked) }
+            val added = parts.drop(1).map { EditorItem(nextKey++, it, current.checked, current.indent) }
             val items = s.items.toMutableList().apply {
                 set(index, current.copy(text = parts.first()))
                 addAll(index + 1, added)
@@ -292,12 +298,38 @@ class EditorViewModel(
 
     fun addItemAfter(key: Long) = change(coalesce = false) { s ->
         val index = s.items.indexOfFirst { it.key == key }
-        val item = EditorItem(nextKey++, "", checked = s.items.getOrNull(index)?.checked ?: false)
+        val current = s.items.getOrNull(index)
+        val item = EditorItem(nextKey++, "", checked = current?.checked ?: false, indent = current?.indent ?: 0)
         s.copy(items = s.items.toMutableList().apply { add(index + 1, item) }, focusTarget = item.key)
     }
 
+    /**
+     * Ticking a parent ticks its sub-items too; unticking a sub-item unticks its parent, since a
+     * parent only counts as done when everything under it is.
+     */
     fun toggleItem(key: Long) = change(coalesce = false) { s ->
-        s.copy(items = s.items.map { if (it.key == key) it.copy(checked = !it.checked) else it })
+        val index = s.items.indexOfFirst { it.key == key }
+        if (index < 0) return@change s
+        val checked = !s.items[index].checked
+        val affected = HashSet<Int>().apply { add(index) }
+        if (!s.items[index].isChild) {
+            var i = index + 1
+            while (i < s.items.size && s.items[i].isChild) affected += i++
+        } else if (!checked) {
+            (index downTo 0).firstOrNull { !s.items[it].isChild }?.let { affected += it }
+        }
+        s.copy(items = s.items.mapIndexed { i, it -> if (i in affected) it.copy(checked = checked) else it })
+    }
+
+    fun canIndent(key: Long): Boolean = state.items.indexOfFirst { it.key == key } > 0
+
+    /** Nests the item one level under the item above it, or moves it back out. */
+    fun setIndented(key: Long, indented: Boolean) {
+        val item = state.items.firstOrNull { it.key == key } ?: return
+        if (item.isChild == indented || (indented && !canIndent(key))) return
+        change(coalesce = false) { s ->
+            s.copy(items = s.items.map { if (it.key == key) it.copy(indent = if (indented) 1 else 0) else it })
+        }
     }
 
     fun removeItem(key: Long) = change(coalesce = false) { s ->
@@ -306,18 +338,21 @@ class EditorViewModel(
         val group = s.items.filter { it.checked == removed?.checked }
         val i = group.indexOfFirst { it.key == key }
         val neighbour = group.getOrNull(i - 1) ?: group.getOrNull(i + 1)
-        s.copy(items = s.items.filter { it.key != key }, focusTarget = neighbour?.key)
+        s.copy(items = s.items.filter { it.key != key }.normalized(), focusTarget = neighbour?.key)
     }
 
     fun uncheckAll() = change(coalesce = false) { s -> s.copy(items = s.items.map { it.copy(checked = false) }) }
-    fun deleteChecked() = change(coalesce = false) { s -> s.copy(items = s.items.filter { !it.checked }) }
+    fun deleteChecked() = change(coalesce = false) { s -> s.copy(items = s.items.filter { !it.checked }.normalized()) }
 
     /** Switches between free text and a checklist, one line per item. */
     fun toggleChecklist() = change(coalesce = false) { s ->
         if (s.isChecklist) {
-            s.copy(isChecklist = false, items = emptyList(), content = s.items.joinToString("\n") { it.text })
+            s.copy(isChecklist = false, items = emptyList(), content = s.items.joinToString("\n") { "  ".repeat(it.indent) + it.text })
         } else {
-            val items = s.content.lines().filter { it.isNotBlank() }.map { EditorItem(nextKey++, it) }
+            // Lines that start with whitespace come back as sub-items, so list -> text -> list round-trips.
+            val items = s.content.lines().filter { it.isNotBlank() }
+                .map { EditorItem(nextKey++, it.trimStart(), indent = if (it.first().isWhitespace()) 1 else 0) }
+                .normalized()
                 .ifEmpty { listOf(EditorItem(nextKey++, "")) }
             s.copy(isChecklist = true, content = "", items = items, focusTarget = items.last().key)
         }

@@ -45,6 +45,9 @@ android {
                 // Robolectric normally downloads its Android runtime itself at test time; let Gradle
                 // fetch it instead so tests use the same repositories and cache as the build.
                 it.dependsOn(robolectricRuntime)
+                // Exported Room schemas, so migrations can be tested against every released version.
+                it.systemProperty("room.schemas", "$projectDir/schemas")
+                it.inputs.dir("$projectDir/schemas")
                 it.systemProperty("robolectric.offline", "true")
                 it.systemProperty("robolectric.dependency.dir", robolectricRuntime.get().destinationDir.path)
             }

@@ -164,7 +164,7 @@ class RepositoryTest {
     fun backupRoundTrip() = runBlocking {
         val a = repo.save(Note(title = "Text", content = "hello", color = 2, pinned = true), emptyList())
         val b = repo.save(Note(title = "List", isChecklist = true, archived = true), listOf(
-            ChecklistItem(noteId = 0, text = "one", checked = true), ChecklistItem(noteId = 0, text = "two"),
+            ChecklistItem(noteId = 0, text = "one", checked = true), ChecklistItem(noteId = 0, text = "two", indent = 1),
         ))
         repo.setLabel(listOf(a, b), repo.createLabel("Shared")!!, true)
         repo.addImageBytes(a, byteArrayOf(9, 8, 7))
@@ -181,6 +181,7 @@ class RepositoryTest {
         val list = all.getValue("List")
         assertTrue(list.note.archived)
         assertEquals(listOf("one" to true, "two" to false), list.sortedItems.map { it.text to it.checked })
+        assertEquals(listOf(0, 1), list.sortedItems.map { it.indent })
         assertEquals(listOf("Shared"), list.labels.map { it.name })
 
         assertTrue(runCatching { app.backup.import("{\"notes\":[]}") }.isFailure)

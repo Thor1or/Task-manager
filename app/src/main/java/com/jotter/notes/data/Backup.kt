@@ -23,7 +23,7 @@ class Backup(private val repo: NotesRepository) {
             n.note.trashedAt?.let { o.put("trashedAt", it) }
             n.note.reminderAt?.let { o.put("reminderAt", it) }
             o.put("items", JSONArray().apply {
-                n.sortedItems.forEach { put(JSONObject().put("text", it.text).put("checked", it.checked)) }
+                n.sortedItems.forEach { put(JSONObject().put("text", it.text).put("checked", it.checked).put("indent", it.indent)) }
             })
             o.put("labels", JSONArray().apply { n.sortedLabels.forEach { put(it.name) } })
             o.put("images", JSONArray().apply {
@@ -59,7 +59,10 @@ class Backup(private val repo: NotesRepository) {
                 ),
                 (0 until items.length()).map {
                     val item = items.getJSONObject(it)
-                    ChecklistItem(noteId = 0, text = item.optString("text"), checked = item.optBoolean("checked"))
+                    ChecklistItem(
+                        noteId = 0, text = item.optString("text"), checked = item.optBoolean("checked"),
+                        indent = item.optInt("indent").coerceIn(0, 1),
+                    )
                 },
             )
             if (o.has("reminderAt") && !o.has("trashedAt")) {

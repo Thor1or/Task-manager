@@ -101,7 +101,7 @@ fun NoteCard(
                         // When everything is ticked, show the ticked items instead of an empty card.
                         val preview = if (open.isEmpty()) items else open
                         preview.take(MAX_PREVIEW_ITEMS).forEach { item ->
-                            Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
+                            Row(Modifier.padding(start = 20.dp * item.indent, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.Top) {
                                 Icon(
                                     if (item.checked) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
                                     contentDescription = if (item.checked) "Checked" else "Not checked",

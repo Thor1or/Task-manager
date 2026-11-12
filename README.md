@@ -10,6 +10,8 @@ device; the app does not request the internet permission.
 
 - **Notes and checklists** – free text or tick-box lists, convertible both ways; checked items
   collapse into their own section; Enter (or a multi-line paste) splits into new items
+- **Sub-items** – indent a list item one level under the one above it (drag it sideways, tap the
+  indent button, or press Tab); ticking a parent ticks its sub-items
 - **Autosave** with undo / redo; a note left empty is discarded
 - **Pin, archive, trash** – trash is emptied automatically after 7 days; restore or delete forever
 - **12 note colours** with light and dark variants

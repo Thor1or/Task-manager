@@ -10,6 +10,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentIncrease
 import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Add
@@ -80,6 +83,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -92,7 +96,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
@@ -393,6 +399,8 @@ private fun Checklist(state: EditorState, vm: EditorViewModel, style: TextStyle,
                 onToggle = { vm.toggleItem(item.key) },
                 onRemove = { vm.removeItem(item.key) },
                 onNext = { vm.addItemAfter(item.key) },
+                canIndent = vm.canIndent(item.key),
+                onIndent = { vm.setIndented(item.key, it) },
             )
         }
     }
@@ -438,8 +446,11 @@ private fun ItemRow(
     onToggle: () -> Unit,
     onRemove: () -> Unit,
     onNext: () -> Unit,
+    canIndent: Boolean,
+    onIndent: (Boolean) -> Unit,
 ) {
     val focus = remember { FocusRequester() }
+    val indent by rememberUpdatedState(onIndent)
     var focused by remember { mutableStateOf(false) }
     LaunchedEffect(requestFocus) {
         if (requestFocus) {
@@ -447,7 +458,24 @@ private fun ItemRow(
             onFocused()
         }
     }
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            // Drag an item sideways to nest it under the one above, or to move it back out.
+            .pointerInput(readOnly) {
+                if (readOnly) return@pointerInput
+                var dragged = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dragged = 0f },
+                    onDragEnd = {
+                        if (dragged > INDENT_DRAG.toPx()) indent(true)
+                        else if (dragged < -INDENT_DRAG.toPx()) indent(false)
+                    },
+                ) { _, amount -> dragged += amount }
+            }
+            .padding(start = 16.dp + INDENT_WIDTH * item.indent),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Checkbox(
             checked = item.checked,
             onCheckedChange = { onToggle() },
@@ -471,19 +499,38 @@ private fun ItemRow(
                 .onFocusChanged { focused = it.isFocused }
                 .onPreviewKeyEvent {
                     // Backspace in an empty item removes it, like deleting an empty line.
-                    if (it.key == Key.Backspace && it.type == KeyEventType.KeyDown && item.text.isEmpty()) {
-                        onRemove(); true
-                    } else false
+                    when {
+                        it.type != KeyEventType.KeyDown -> false
+                        it.key == Key.Backspace && item.text.isEmpty() -> {
+                            // Like a word processor: first un-nest the empty sub-item, then delete it.
+                            if (item.isChild) onIndent(false) else onRemove()
+                            true
+                        }
+                        it.key == Key.Tab -> { onIndent(!it.isShiftPressed); true }
+                        else -> false
+                    }
                 }
                 .testTag("item"),
         )
         if (!readOnly && focused) {
+            if (item.isChild) {
+                IconButton(onClick = { onIndent(false) }) {
+                    Icon(Icons.AutoMirrored.Outlined.FormatIndentDecrease, "Remove indent", tint = fg.copy(alpha = 0.7f))
+                }
+            } else if (canIndent) {
+                IconButton(onClick = { onIndent(true) }) {
+                    Icon(Icons.AutoMirrored.Outlined.FormatIndentIncrease, "Indent", tint = fg.copy(alpha = 0.7f))
+                }
+            }
             IconButton(onClick = onRemove) { Icon(Icons.Outlined.Close, "Delete item", tint = fg.copy(alpha = 0.7f)) }
         } else {
             Spacer(Modifier.size(48.dp))
         }
     }
 }
+
+private val INDENT_WIDTH = 32.dp
+private val INDENT_DRAG = 24.dp
 
 /** Borderless text field with a placeholder, matching the look of a sheet of paper. */
 @Composable
