@@ -24,12 +24,13 @@ object Backup {
                 .put("dueMinute", it.dueMinute ?: JSONObject.NULL).put("durationMin", it.durationMin ?: JSONObject.NULL)
                 .put("recurrence", it.recurrence ?: JSONObject.NULL).put("someday", it.someday)
                 .put("done", it.done).put("doneAt", it.doneAt ?: JSONObject.NULL).put("createdAt", it.createdAt)
+                .put("priority", it.priority)
         })
         put("habits", arr(dao.habitsNow()) {
             JSONObject().put("id", it.id).put("name", it.name).put("groupId", it.groupId ?: JSONObject.NULL)
                 .put("daysMask", it.daysMask).put("reminderMinute", it.reminderMinute ?: JSONObject.NULL)
                 .put("targetMin", it.targetMin).put("planMin", it.planMin).put("archived", it.archived)
-                .put("createdDay", it.createdDay)
+                .put("createdDay", it.createdDay).put("sessions", it.sessions)
         })
         put("checks", arr(dao.checksNow()) { JSONObject().put("habitId", it.habitId).put("day", it.day) })
         put("entries", arr(dao.entriesNow()) {
@@ -58,14 +59,14 @@ object Backup {
                 it.getLong("id"), it.getString("title"), it.optString("notes"), it.longOrNull("groupId"),
                 it.longOrNull("dueDay"), it.intOrNull("dueMinute"), it.intOrNull("durationMin"),
                 it.strOrNull("recurrence"), it.optBoolean("someday"), it.optBoolean("done"),
-                it.longOrNull("doneAt"), it.getLong("createdAt"),
+                it.longOrNull("doneAt"), it.getLong("createdAt"), it.optInt("priority", 4),
             )
         }
         val habits = root.getJSONArray("habits").objects().map {
             Habit(
                 it.getLong("id"), it.getString("name"), it.longOrNull("groupId"), it.getInt("daysMask"),
                 it.intOrNull("reminderMinute"), it.optInt("targetMin"), it.optInt("planMin", 30),
-                it.optBoolean("archived"), it.getLong("createdDay"),
+                it.optBoolean("archived"), it.getLong("createdDay"), it.optInt("sessions", 1),
             )
         }
         val checks = root.getJSONArray("checks").objects().map { HabitCheck(it.getLong("habitId"), it.getLong("day")) }

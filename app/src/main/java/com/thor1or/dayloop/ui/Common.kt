@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -34,7 +36,11 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -48,12 +54,15 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.thor1or.dayloop.data.GroupEntity
+import com.thor1or.dayloop.data.ThemeMode
 import com.thor1or.dayloop.logic.NlParser
 import com.thor1or.dayloop.logic.Parsed
 import kotlinx.coroutines.delay
@@ -61,9 +70,17 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+/** Whether the app should be dark right now under [mode]. */
 @Composable
-fun DayloopTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun isDark(mode: ThemeMode): Boolean = when (mode) {
+    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+    ThemeMode.LIGHT -> false
+    ThemeMode.DARK -> true
+}
+
+@Composable
+fun DayloopTheme(mode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+    val dark = isDark(mode)
     val context = LocalContext.current
     val colors = when {
         android.os.Build.VERSION.SDK_INT >= 31 ->
@@ -149,7 +166,20 @@ private class Highlight(val spans: List<IntRange>, val color: Color) : VisualTra
     }
 }
 
-/** One-line capture field that shows what it understood while you type. */
+/** Colour for a task priority; null for the default, lowest one. */
+fun priorityColor(priority: Int): Color? = when (priority) {
+    1 -> Color(0xFFD1453B)
+    2 -> Color(0xFFE08A1E)
+    3 -> Color(0xFF3F7FE0)
+    else -> null
+}
+
+private val groupToken = Regex("(?:^|\\s)[#@]([\\p{L}\\p{N}_-]*)$")
+
+/**
+ * One-line capture field that shows what it understood while you type. Typing "#" or "@" offers
+ * the existing [groups] to tap.
+ */
 @Composable
 fun QuickAddField(
     value: String,
@@ -157,12 +187,43 @@ fun QuickAddField(
     parsed: Parsed,
     placeholder: String,
     modifier: Modifier = Modifier,
+    groups: List<GroupEntity> = emptyList(),
     onSubmit: () -> Unit,
 ) {
+    // The field keeps its own cursor, so a tapped suggestion can leave it at the end.
+    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    if (field.text != value) field = TextFieldValue(value, TextRange(value.length))
+
+    val typed = groupToken.find(value)?.groupValues?.get(1)
+    val offered = if (typed == null) emptyList() else groups.filter {
+        it.name.startsWith(typed, ignoreCase = true) && !it.name.substringBefore(' ').equals(typed, ignoreCase = true)
+    }
+    Column(modifier.fillMaxWidth()) {
+    if (offered.isNotEmpty()) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            offered.forEach { g ->
+                AssistChip(
+                    onClick = {
+                        val text = value.dropLast(typed!!.length) + g.name.substringBefore(' ') + " "
+                        field = TextFieldValue(text, TextRange(text.length))
+                        onValueChange(text)
+                    },
+                    label = { Text(g.name) },
+                    leadingIcon = { Dot(Color(g.color)) },
+                )
+            }
+        }
+    }
     OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier.fillMaxWidth(),
+        value = field,
+        onValueChange = {
+            field = it
+            if (it.text != value) onValueChange(it.text)
+        },
+        modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         placeholder = { Text(placeholder, maxLines = 1) },
         visualTransformation = Highlight(parsed.spans, MaterialTheme.colorScheme.primary),
@@ -178,6 +239,7 @@ fun QuickAddField(
         },
         supportingText = parsedSummary(parsed).takeIf { it.isNotEmpty() }?.let { { Text(it) } },
     )
+    }
 }
 
 /** "Thu 10 Dec · 09:00 · 30m · #Home · every day" */
@@ -186,6 +248,7 @@ fun parsedSummary(p: Parsed): String = listOfNotNull(
     p.time?.let { NlParser.formatClock(it.hour * 60 + it.minute) },
     p.durationMin?.let { NlParser.formatDuration(it) },
     p.group?.let { "#$it" },
+    p.priority?.let { "P$it" },
     p.recurrence?.describe(),
 ).joinToString(" · ")
 

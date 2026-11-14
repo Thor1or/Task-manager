@@ -15,13 +15,15 @@ data class Parsed(
     val durationMin: Int? = null,
     val group: String? = null,
     val recurrence: Recurrence? = null,
+    /** 1 (highest) to 4, from "p1" … "p4". */
+    val priority: Int? = null,
     /** Character ranges of the input that were understood as something other than the title. */
     val spans: List<IntRange> = emptyList(),
 )
 
 /**
  * Reads lines such as "buy bread at 9am on 10/12", "call mom tomorrow 14:30 for 20m #family"
- * or "gym every mon, wed 7am". Works offline; English, with the common Portuguese words.
+ * "gym every mon, wed 7am" or "standup 0830 p1 @work". Works offline; English, with the common Portuguese words.
  */
 object NlParser {
     // Word boundaries that also work next to accented letters.
@@ -61,7 +63,8 @@ object NlParser {
 
     private fun rx(p: String) = Regex(p, RegexOption.IGNORE_CASE)
 
-    private val groupRx = rx("(?<!\\S)#([\\p{L}\\p{N}_-]+)")
+    private val groupRx = rx("(?<!\\S)[#@]([\\p{L}\\p{N}_-]+)")
+    private val priorityRx = rx("${L}p([1-4])$R")
     private val dailyRx = rx("$L(?:every\\s?day|daily|todo dia|todos os dias)$R")
     private val weekdaysRx = rx("$L(?:every\\s+weekdays?|dias úteis|dias uteis)$R")
     private val everyDaysRx = rx("$L(?:every|toda|todo)\\s+((?:$dayAny)(?:\\s*(?:,|and|e|&)\\s*(?:$dayAny))*)$R")
@@ -79,6 +82,9 @@ object NlParser {
     private val ampmRx = rx("$L(?:(?:at|às)\\s+)?(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm|a\\.m\\.|p\\.m\\.)(?![\\p{L}\\p{N}])")
     private val atRx = rx("$L(?:at|às)\\s+(\\d{1,2})(?:(?::|h)(\\d{2}))?h?$R")
     private val clockRx = rx("$L(\\d{1,2})(?::|h)(\\d{2})$R")
+    // Military time: "at 800", "at 2000", or a bare four digits such as "0800".
+    private val atMilitaryRx = rx("$L(?:at|às)\\s+(\\d{1,2})(\\d{2})$R")
+    private val militaryRx = rx("$L(\\d{2})(\\d{2})$R")
 
     private val todayRx = rx("$L(?:today|hoje)$R")
     private val tomorrowRx = rx("$L(?:tomorrow|tmrw|tmr|amanhã|amanha)$R")
@@ -87,8 +93,8 @@ object NlParser {
     private val nextMonthRx = rx("${L}next\\s+month$R")
     private val isoRx = rx("$L(?:on\\s+)?(\\d{4})-(\\d{1,2})-(\\d{1,2})$R")
     private val numericRx = rx("$L(?:(?:on|em|dia)\\s+)?(\\d{1,2})/(\\d{1,2})(?:/(\\d{2,4}))?$R")
-    private val dayMonthRx = rx("$L(?:(?:on|em|dia)\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+|de\\s+)?($monthAny)$R(?:,?\\s+(?:de\\s+)?(\\d{4})$R)?")
-    private val monthDayRx = rx("$L(?:on\\s+)?($monthAny)\\s+(\\d{1,2})(?:st|nd|rd|th)?$R(?:,?\\s+(\\d{4})$R)?")
+    private val dayMonthRx = rx("$L(?:(?:on|em|dia)\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+|de\\s+)?($monthAny)$R(?:,?\\s+(?:de\\s+)?((?:19|20)\\d{2})$R)?")
+    private val monthDayRx = rx("$L(?:on\\s+)?($monthAny)\\s+(\\d{1,2})(?:st|nd|rd|th)?$R(?:,?\\s+((?:19|20)\\d{2})$R)?")
     private val weekdayPrefixedRx = rx("$L(?:on|next|na|no)\\s+($dayAny)$R")
     private val weekdayRx = rx("$L($dayFull)$R")
 
@@ -127,6 +133,8 @@ object NlParser {
 
         var group: String? = null
         take(groupRx) { group = it.groupValues[1]; true }
+        var priority: Int? = null
+        take(priorityRx) { priority = it.groupValues[1].toInt(); true }
 
         // --- recurrence -------------------------------------------------------------------
         var recurrence: Recurrence? = null
@@ -174,6 +182,7 @@ object NlParser {
                 val pm = m.groupValues[3].lowercase().startsWith("p")
                 if (h !in 1..12) false else setTime(h % 12 + if (pm) 12 else 0, min)
             } &&
+            !take(atMilitaryRx) { m -> setTime(m.groupValues[1].toInt(), m.groupValues[2].toInt()) } &&
             !take(atRx) { m -> setTime(m.groupValues[1].toInt(), m.groupValues[2].ifEmpty { "0" }.toInt()) }
         ) {
             take(clockRx) { m -> setTime(m.groupValues[1].toInt(), m.groupValues[2].toInt()) }
@@ -231,6 +240,16 @@ object NlParser {
             take(weekdayPrefixedRx) { m -> date = upcoming(dayNumber(m.groupValues[1])!!); true } ||
             take(weekdayRx) { m -> date = upcoming(dayNumber(m.groupValues[1])!!); true }
 
+        // --- bare military time, last, so the year of a date is never read as a time ------------
+        if (time == null) {
+            take(militaryRx) { m ->
+                val n = m.value.toInt()
+                // "2027" on its own is far more likely a year than 20:27.
+                if (n in today.year - 1..today.year + 3) false
+                else setTime(m.groupValues[1].toInt(), m.groupValues[2].toInt())
+            }
+        }
+
         // --- fill in what follows from the rest -----------------------------------------------
         if (!found) {
             val t = time
@@ -250,16 +269,21 @@ object NlParser {
             .replace(Regex("\\s+"), " ")
             .trim()
             .trim(',', ';', '-', ' ')
-        return Parsed(title, date, time, duration, group, recurrence, spans.sortedBy { it.first })
+        return Parsed(title, date, time, duration, group, recurrence, priority, spans.sortedBy { it.first })
     }
 
-    /** "9am", "14:30", "7" → minutes after midnight, or null. */
+    /** "9am", "14:30", "7", "0800", "2000" → minutes after midnight, or null. */
     fun parseClock(text: String): Int? {
         val s = text.trim()
         if (s.isEmpty()) return null
         Regex("^(\\d{1,2})$").find(s)?.let { m ->
             val h = m.groupValues[1].toInt()
             return if (h in 0..23) h * 60 else null
+        }
+        Regex("^(\\d{1,2})(\\d{2})$").find(s)?.let { m ->
+            val h = m.groupValues[1].toInt()
+            val min = m.groupValues[2].toInt()
+            return if (h in 0..23 && min in 0..59) h * 60 + min else null
         }
         val p = parse(s, LocalDate.of(2000, 1, 1), LocalTime.MIDNIGHT)
         val t = p.time ?: return null

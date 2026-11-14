@@ -17,7 +17,12 @@ data class Settings(
     /** Folder picked for the automatic daily backup. */
     val backupFolder: String? = null,
     val lastBackupDay: Long = 0,
+    val theme: ThemeMode = ThemeMode.SYSTEM,
+    /** The Plan tab shows the day as time blocks instead of a list. */
+    val planTimeline: Boolean = false,
 )
+
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -36,6 +41,8 @@ class Prefs(context: Context) {
         eveningPrompt = sp.getInt("eveningPrompt", 21 * 60).takeIf { it >= 0 },
         backupFolder = sp.getString("backupFolder", null),
         lastBackupDay = sp.getLong("lastBackupDay", 0),
+        theme = runCatching { ThemeMode.valueOf(sp.getString("theme", "SYSTEM")!!) }.getOrDefault(ThemeMode.SYSTEM),
+        planTimeline = sp.getBoolean("planTimeline", false),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -48,6 +55,8 @@ class Prefs(context: Context) {
             .putInt("eveningPrompt", s.eveningPrompt ?: -1)
             .putString("backupFolder", s.backupFolder)
             .putLong("lastBackupDay", s.lastBackupDay)
+            .putString("theme", s.theme.name)
+            .putBoolean("planTimeline", s.planTimeline)
             .apply()
         state.value = s
     }

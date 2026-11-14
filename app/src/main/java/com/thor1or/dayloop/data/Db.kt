@@ -10,6 +10,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -25,7 +27,7 @@ interface AppDao {
     @Query("UPDATE plan_blocks SET groupId = NULL WHERE groupId = :id") suspend fun clearGroupFromBlocks(id: Long)
 
     // Tasks
-    @Query("SELECT * FROM tasks ORDER BY done, dueDay IS NULL, dueDay, dueMinute IS NULL, dueMinute, id")
+    @Query("SELECT * FROM tasks ORDER BY done, dueDay IS NULL, dueDay, priority, dueMinute IS NULL, dueMinute, id")
     fun tasks(): Flow<List<Task>>
     @Query("SELECT * FROM tasks") suspend fun tasksNow(): List<Task>
     @Query("SELECT * FROM tasks WHERE id = :id") suspend fun task(id: Long): Task?
@@ -59,6 +61,9 @@ interface AppDao {
     @Query("SELECT * FROM time_entries") suspend fun entriesNow(): List<TimeEntry>
     @Query("SELECT * FROM time_entries WHERE habitId = :habitId AND startMs >= :fromMs AND startMs < :toMs")
     suspend fun habitEntries(habitId: Long, fromMs: Long, toMs: Long): List<TimeEntry>
+    @Query("SELECT * FROM time_entries WHERE id = :id") suspend fun entry(id: Long): TimeEntry?
+    @Query("SELECT * FROM time_entries WHERE blockId = :blockId ORDER BY startMs DESC LIMIT 1")
+    suspend fun entryForBlock(blockId: Long): TimeEntry?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putEntry(e: TimeEntry): Long
     @Query("DELETE FROM time_entries WHERE id = :id") suspend fun deleteEntry(id: Long)
 
@@ -87,14 +92,24 @@ interface AppDao {
 
 @Database(
     entities = [GroupEntity::class, Task::class, Habit::class, HabitCheck::class, TimeEntry::class, PlanBlock::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): AppDao
 
     companion object {
-        fun open(context: Context): AppDb =
-            Room.databaseBuilder(context.applicationContext, AppDb::class.java, "dayloop.db").build()
+        /** Version 2 adds task priorities and habit sessions. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 4")
+                db.execSQL("ALTER TABLE habits ADD COLUMN sessions INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
+        fun open(context: Context, name: String = "dayloop.db"): AppDb =
+            Room.databaseBuilder(context.applicationContext, AppDb::class.java, name)
+                .addMigrations(MIGRATION_1_2)
+                .build()
     }
 }

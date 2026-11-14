@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -135,6 +138,9 @@ fun PlanScreen(vm: AppViewModel) {
             IconButton(onClick = { vm.planDay.value = day + 1 }) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next day")
             }
+            TextButton(onClick = { vm.repo.prefs.update { it.copy(planTimeline = !it.planTimeline) } }) {
+                Text(if (settings.planTimeline) "List" else "Blocks")
+            }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -170,7 +176,30 @@ fun PlanScreen(vm: AppViewModel) {
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        LazyColumn(Modifier.weight(1f)) {
+        // Sessions of one task or habit are numbered: "part 1 of 2".
+        val parts = remember(blocks) {
+            val groupsOf = blocks.groupBy { it.habitId?.let { h -> "h$h" } ?: it.taskId?.let { t -> "t$t" } ?: it.title.trim().lowercase() }
+            blocks.associate { b ->
+                val same = groupsOf.values.first { list -> list.any { it.id == b.id } }
+                b.id to if (same.size > 1) "part ${same.indexOfFirst { it.id == b.id } + 1} of ${same.size}" else null
+            }
+        }
+
+        if (settings.planTimeline) {
+            PlanTimeline(
+                blocks = blocks, slots = slots, groups = groups,
+                dayStart = settings.dayStart, dayEnd = settings.dayEnd, nowMin = nowMin,
+                modifier = Modifier.weight(1f),
+                onTap = { editing = it },
+                onMove = { b, minute -> vm.act { moveBlockToTime(b.id, minute) } },
+                onResize = { b, minutes, lock ->
+                    vm.act { dao.block(b.id)?.let { saveBlock(it.copy(desiredMin = minutes, rigid = it.rigid || lock)) } }
+                },
+                onCreate = { minute ->
+                    editing = PlanBlock(day = day, position = 0, title = "", desiredMin = 30, fixedStart = minute, rigid = true)
+                },
+            )
+        } else LazyColumn(Modifier.weight(1f)) {
             if (blocks.isEmpty()) {
                 item {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -202,6 +231,8 @@ fun PlanScreen(vm: AppViewModel) {
                     block = b,
                     slot = slot,
                     idealStart = ideal[b.id],
+                    part = parts[b.id],
+                    onLock = { vm.act { dao.block(b.id)?.let { saveBlock(it.copy(rigid = !it.rigid)) } } },
                     groups = groups,
                     canBegin = isToday,
                     onClick = { editing = b },
@@ -217,8 +248,9 @@ fun PlanScreen(vm: AppViewModel) {
             value = input,
             onValueChange = { input = it },
             parsed = parsed,
-            placeholder = "Add activity: Deep work 90m",
+            placeholder = "Add activity: Deep work 90m #work",
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            groups = groups,
         ) {
             if (parsed.title.isNotBlank()) {
                 val p = parsed
@@ -228,6 +260,8 @@ fun PlanScreen(vm: AppViewModel) {
                             day = day, position = 0, title = p.title, groupId = groupIdFor(p.group),
                             desiredMin = p.durationMin ?: 30,
                             fixedStart = p.time?.let { it.hour * 60 + it.minute },
+                            // Something typed with a start time is an appointment: its length is locked.
+                            rigid = p.time != null,
                         )
                     )
                 }
@@ -237,7 +271,8 @@ fun PlanScreen(vm: AppViewModel) {
     }
 
     editing?.let { b ->
-        BlockDialog(b, groups, started = b.actualStart != null, onClose = { editing = null }, vm = vm)
+        // Re-read from the list so the dialog shows the activity as it is now.
+        BlockDialog(blocks.firstOrNull { it.id == b.id && b.id != 0L } ?: b, groups, isToday, nowMin, onClose = { editing = null }, vm = vm)
     }
     if (pickingTasks) TaskPicker(tasks, day, onClose = { pickingTasks = false }) { chosen ->
         vm.act { addTasksToPlan(day, chosen) }
@@ -249,6 +284,8 @@ private fun BlockRow(
     block: PlanBlock,
     slot: PlanEngine.Slot,
     idealStart: Int?,
+    part: String?,
+    onLock: () -> Unit,
     groups: List<GroupEntity>,
     canBegin: Boolean,
     onClick: () -> Unit,
@@ -295,7 +332,8 @@ private fun BlockRow(
             )
             val notes = buildList {
                 if (block.fixedStart != null) add("Fixed ${NlParser.formatClock(block.fixedStart)}")
-                if (block.rigid) add("Rigid")
+                if (part != null) add(part)
+                if (block.rigid) add("Locked length")
                 if (slot.compressed) add("wanted ${NlParser.formatDuration(block.desiredMin)}")
                 if (done) add("planned ${NlParser.formatDuration(block.desiredMin)}")
                 val late = if (idealStart != null && (done || running || slot.pushed)) slot.start - idealStart else 0
@@ -313,10 +351,20 @@ private fun BlockRow(
             )
             running -> Button(onClick = onDone, modifier = Modifier.padding(end = 8.dp)) { Text("Done") }
             else -> {
-                IconButton(onClick = { onMove(-1) }, modifier = Modifier.size(32.dp)) {
+                // Locked: this activity keeps its length and the others adjust around it.
+                IconButton(onClick = onLock, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = if (block.rigid) "Unlock length" else "Lock length",
+                        tint = if (block.rigid) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(onClick = { onMove(-1) }, modifier = Modifier.size(30.dp)) {
                     Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
                 }
-                IconButton(onClick = { onMove(1) }, modifier = Modifier.size(32.dp)) {
+                IconButton(onClick = { onMove(1) }, modifier = Modifier.size(30.dp)) {
                     Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
                 }
                 if (canBegin) {
@@ -327,28 +375,49 @@ private fun BlockRow(
     }
 }
 
+/**
+ * Edit an activity (or create one, when its id is 0): what was planned, and — once it has
+ * happened — when it really started and ended.
+ */
 @Composable
 private fun BlockDialog(
     block: PlanBlock,
     groups: List<GroupEntity>,
-    started: Boolean,
+    isToday: Boolean,
+    nowMin: Int?,
     onClose: () -> Unit,
     vm: AppViewModel,
 ) {
+    val isNew = block.id == 0L
+    val started = block.actualStart != null
     var title by remember { mutableStateOf(block.title) }
     var length by remember { mutableStateOf(NlParser.formatDuration(block.desiredMin)) }
     var fixed by remember { mutableStateOf(block.fixedStart?.let(NlParser::formatClock) ?: "") }
     var rigid by remember { mutableStateOf(block.rigid) }
     var groupId by remember { mutableStateOf(block.groupId) }
+    val begunText = block.actualStart?.let(NlParser::formatClock) ?: ""
+    val endedText = block.actualEnd?.let(NlParser::formatClock) ?: ""
+    var begun by remember(block.actualStart) { mutableStateOf(begunText) }
+    var ended by remember(block.actualEnd) { mutableStateOf(endedText) }
+
     val lengthMin = NlParser.parseDuration(length)
     val fixedMin = NlParser.parseClock(fixed)
     val fixedOk = fixed.isBlank() || fixedMin != null
+    val begunMin = NlParser.parseClock(begun)
+    val endedMin = NlParser.parseClock(ended)
+    val begunOk = begun.isBlank() || (begunMin != null && (nowMin == null || begunMin <= nowMin))
+    val endedOk = ended.isBlank() || (endedMin != null && begunMin != null && endedMin > begunMin)
+    // Only today's plan can have something still running.
+    val runningOk = begun.isBlank() || ended.isNotBlank() || isToday
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Activity") },
+        title = { Text(if (isNew) "New activity" else "Activity") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
@@ -362,9 +431,9 @@ private fun BlockDialog(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Rigid length")
+                        Text("Lock length")
                         Text(
-                            "Never shortened when the day is overbooked",
+                            "Keeps this length; other activities adjust around it",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -372,24 +441,53 @@ private fun BlockDialog(
                     Switch(rigid, { rigid = it })
                 }
                 GroupChips(groups, groupId, "No group") { groupId = it }
-                Row {
-                    TextButton(onClick = { vm.act { deleteBlock(block) }; onClose() }) { Text("Delete") }
-                    if (started) {
-                        TextButton(onClick = { vm.act { resetBlock(block) }; onClose() }) { Text("Mark not started") }
+
+                if (!isNew) {
+                    Text("What really happened", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            begun, { begun = it }, label = { Text("Started") }, singleLine = true,
+                            placeholder = { Text("not yet") }, isError = !begunOk, modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            ended, { ended = it }, label = { Text("Ended") }, singleLine = true,
+                            placeholder = { Text(if (begun.isBlank()) "" else "running") },
+                            isError = !endedOk || !runningOk, modifier = Modifier.weight(1f),
+                        )
                     }
+                    Text(
+                        "Correct these if you forgot to switch: e.g. 0930 or 14:15. A start with no end means it is running now.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (!started) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Split into", Modifier.padding(end = 4.dp))
+                            listOf(2, 3, 4).forEach { n ->
+                                TextButton(onClick = { vm.act { splitBlock(block.id, n) }; onClose() }) { Text("$n") }
+                            }
+                            Text("sessions", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    TextButton(onClick = { vm.act { deleteBlock(block) }; onClose() }) { Text("Delete") }
                 }
             }
         },
         confirmButton = {
             Button(
-                enabled = title.isNotBlank() && lengthMin != null && fixedOk,
+                enabled = title.isNotBlank() && lengthMin != null && fixedOk && begunOk && endedOk && runningOk,
                 onClick = {
                     val edited = block.copy(
                         title = title.trim(), desiredMin = lengthMin ?: block.desiredMin,
                         fixedStart = fixedMin, rigid = rigid, groupId = groupId,
                     )
-                    // Position and progress may have changed while the dialog was open.
+                    val timesChanged = begun != begunText || ended != endedText
                     vm.act {
+                        if (isNew) {
+                            addBlock(edited)
+                            return@act
+                        }
+                        // Position and progress may have changed while the dialog was open.
                         val current = dao.block(block.id) ?: return@act
                         saveBlock(
                             edited.copy(
@@ -398,6 +496,9 @@ private fun BlockDialog(
                                 actualEnd = current.actualEnd,
                             )
                         )
+                        // A new fixed start moves the activity to that point of the day.
+                        if (fixedMin != null && fixedMin != block.fixedStart) moveBlockToTime(block.id, fixedMin)
+                        if (timesChanged) setBlockTimes(block.id, begunMin.takeIf { begun.isNotBlank() }, endedMin.takeIf { ended.isNotBlank() })
                     }
                     onClose()
                 },

@@ -1,5 +1,6 @@
 package com.thor1or.dayloop.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -28,6 +29,8 @@ data class Task(
     val done: Boolean = false,
     val doneAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
+    /** 1 (highest) to 4 (lowest, the default). */
+    @ColumnInfo(defaultValue = "4") val priority: Int = 4,
 )
 
 @Entity(tableName = "habits")
@@ -46,6 +49,8 @@ data class Habit(
     val archived: Boolean = false,
     /** Epoch day. */
     val createdDay: Long,
+    /** How many separate sessions the habit is split into when it is put on a day plan. */
+    @ColumnInfo(defaultValue = "1") val sessions: Int = 1,
 )
 
 @Entity(tableName = "habit_checks", primaryKeys = ["habitId", "day"])

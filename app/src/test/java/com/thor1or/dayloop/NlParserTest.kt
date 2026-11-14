@@ -128,4 +128,38 @@ class NlParserTest {
         assertEquals(120, NlParser.parseDuration("2h"))
         assertEquals("1h30m", NlParser.formatDuration(90))
     }
+
+    @Test fun militaryTime() {
+        assertEquals(LocalTime.of(8, 0), p("standup 0800").time)
+        assertEquals(LocalTime.of(20, 0), p("dinner 2000").time)
+        assertEquals(LocalTime.of(20, 0), p("dinner at 2000 tomorrow").time)
+        assertEquals(LocalTime.of(8, 30), p("gym at 830").time)
+        assertEquals("standup", p("standup 0800").title)
+        // Not a time: out of range, or a year.
+        assertNull(p("order 2575 screws").time)
+        assertNull(p("plan 2027 budget").time)
+        val r = p("trip 5 jan 2028")
+        assertNull(r.time)
+        assertEquals(LocalDate.of(2028, 1, 5), r.date)
+        assertEquals(LocalTime.of(7, 0), p("flight 3 dec 0700").time)
+        assertEquals(8 * 60, NlParser.parseClock("0800"))
+        assertEquals(20 * 60, NlParser.parseClock("2000"))
+        assertEquals(8 * 60 + 30, NlParser.parseClock("830"))
+        assertNull(NlParser.parseClock("2460"))
+    }
+
+    @Test fun priorities() {
+        val r = p("pay rent tomorrow p1")
+        assertEquals(1, r.priority)
+        assertEquals("pay rent", r.title)
+        assertEquals(3, p("P3 tidy desk").priority)
+        assertNull(p("buy p5 paper").priority)
+        assertNull(p("stop the app").priority)
+    }
+
+    @Test fun groupsWithHashOrAt() {
+        assertEquals("work", p("report @work").group)
+        assertEquals("home", p("#home water plants").group)
+        assertEquals("mail a@b.com", p("mail a@b.com").title)
+    }
 }

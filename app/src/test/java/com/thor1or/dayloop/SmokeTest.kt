@@ -114,17 +114,17 @@ class SmokeTest {
         val health = repo.groupIdFor("Health")
         val home = repo.groupIdFor("Home")
         fun parse(s: String) = NlParser.parse(s, today, LocalTime.of(6, 0))
-        repo.addTask(parse("Write quarterly report today for 90m #work"))
+        repo.addTask(parse("Write quarterly report today for 90m #work p1"))
         repo.addTask(parse("Call the bank today 14:30 #home"))
         repo.addTask(parse("Buy bread tomorrow at 9am #home"))
-        repo.addTask(parse("Renew passport in 3 days"))
+        repo.addTask(parse("Renew passport in 3 days p2"))
         repo.addTask(parse("Idea: trip to the coast"))
         repo.addTask(parse("Water plants every mon, thu #home"))
         val overdue = repo.addTask(parse("Reply to landlord"))
         repo.saveTask(repo.dao.task(overdue)!!.copy(dueDay = day - 2))
 
         val meditate = repo.saveHabit(Habit(name = "Meditate", groupId = health, reminderMinute = 7 * 60 + 30, targetMin = 10, createdDay = day - 120))
-        val read = repo.saveHabit(Habit(name = "Read", groupId = home, planMin = 30, createdDay = day - 120))
+        val read = repo.saveHabit(Habit(name = "Read", groupId = home, planMin = 60, sessions = 2, createdDay = day - 120))
         val run = repo.saveHabit(Habit(name = "Run", groupId = health, daysMask = 0b0010101, planMin = 40, createdDay = day - 120))
         for (d in 1..120L) {
             if (d % 5 != 0L) repo.setHabitChecked(meditate, day - d, true)
@@ -153,6 +153,11 @@ class SmokeTest {
         await("Deep work")
         await("Lunch")
         shot("1-plan")
+
+        // The same day as time blocks, then back to the list.
+        click("Blocks")
+        shot("1b-plan-blocks")
+        click("List")
 
         // Begin an activity: it becomes the running timer, shown in the bar.
         click("Begin", 2)
@@ -201,6 +206,15 @@ class SmokeTest {
         click("Settings")
         await("Groups")
         shot("9-settings")
+
+        // Dark theme, chosen in the app regardless of the system setting.
+        click("Dark")
+        shot("11-dark-settings")
+        click("Plan")
+        click("Blocks")
+        shot("12-dark-plan-blocks")
+        click("Tasks")
+        shot("13-dark-tasks")
 
         // Timer picker
         openDialog("Start a timer")

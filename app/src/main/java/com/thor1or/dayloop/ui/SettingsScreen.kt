@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thor1or.dayloop.data.Backup
 import com.thor1or.dayloop.data.GroupEntity
 import com.thor1or.dayloop.data.Repository
+import com.thor1or.dayloop.data.ThemeMode
 import com.thor1or.dayloop.logic.DateOrder
 import com.thor1or.dayloop.logic.NlParser
 import java.time.LocalDate
@@ -105,6 +106,17 @@ fun SettingsScreen(vm: AppViewModel) {
             },
             modifier = Modifier.padding(horizontal = 8.dp),
         ) { Text("Add group") }
+
+        SectionHeader("Appearance")
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(ThemeMode.SYSTEM to "Follow system", ThemeMode.LIGHT to "Light", ThemeMode.DARK to "Dark").forEach { (mode, label) ->
+                FilterChip(
+                    selected = settings.theme == mode,
+                    onClick = { prefs.update { it.copy(theme = mode) } },
+                    label = { Text(label) },
+                )
+            }
+        }
 
         SectionHeader("Dates")
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,7 +86,8 @@ fun TasksScreen(vm: AppViewModel) {
                 item {
                     Text(
                         "Nothing here yet. Type below — for example \"buy bread at 9am on 10/12\", " +
-                            "\"call the bank tomorrow\", or just a thought to sort out later.",
+                            "\"call the bank tomorrow 1430 p1 #home\", or just a thought to sort out later. " +
+                            "#name or @name files it under a group; p1 to p4 sets the priority.",
                         Modifier.padding(16.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -130,6 +133,7 @@ fun TasksScreen(vm: AppViewModel) {
             parsed = parsed,
             placeholder = "Add a task: buy bread at 9am on 10/12",
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            groups = groups,
         ) {
             if (parsed.title.isNotBlank()) {
                 val p = parsed
@@ -160,7 +164,13 @@ private fun TaskRow(
             .padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(checked = t.done, onCheckedChange = { onToggle() })
+        val flag = priorityColor(t.priority)
+        Checkbox(
+            checked = t.done,
+            onCheckedChange = { onToggle() },
+            colors = if (flag == null) CheckboxDefaults.colors()
+            else CheckboxDefaults.colors(uncheckedColor = flag, checkedColor = flag),
+        )
         Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
             Text(
                 t.title,
@@ -170,6 +180,7 @@ private fun TaskRow(
                 color = if (t.done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
             )
             val details = listOfNotNull(
+                "P${t.priority}".takeIf { t.priority < 4 },
                 t.dueDay?.takeIf { showDate }?.let { dayLabel(LocalDate.ofEpochDay(it), LocalDate.ofEpochDay(today)) },
                 t.dueMinute?.let { NlParser.formatClock(it) },
                 t.durationMin?.let { NlParser.formatDuration(it) },
@@ -212,6 +223,7 @@ private fun TaskDialog(
     var notes by remember { mutableStateOf(task.notes) }
     var groupId by remember { mutableStateOf(task.groupId) }
     var someday by remember { mutableStateOf(task.someday) }
+    var priority by remember { mutableStateOf(task.priority) }
     var whenText by remember {
         mutableStateOf(
             NlParser.format(
@@ -245,6 +257,16 @@ private fun TaskDialog(
                 )
                 OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
                 GroupChips(groups, groupId, "No group") { groupId = it }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (1..4).forEach { p ->
+                        FilterChip(
+                            selected = priority == p,
+                            onClick = { priority = p },
+                            label = { Text("P$p") },
+                            leadingIcon = priorityColor(p)?.let { c -> { Dot(c) } },
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Someday", Modifier.weight(1f))
                     Switch(someday, { someday = it })
@@ -258,6 +280,7 @@ private fun TaskDialog(
                 onClick = {
                     val edited = task.copy(
                         title = title.trim(), notes = notes.trim(), groupId = groupId, someday = someday,
+                        priority = priority,
                         dueDay = schedule.date?.toEpochDay(),
                         dueMinute = schedule.time?.let { it.hour * 60 + it.minute },
                         durationMin = schedule.durationMin,

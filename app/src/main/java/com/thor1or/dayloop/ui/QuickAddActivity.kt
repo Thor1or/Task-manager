@@ -50,7 +50,7 @@ class QuickAddActivity : ComponentActivity() {
         val order = repo.prefs.settings.value.dateOrder
 
         setContent {
-            DayloopTheme {
+            DayloopTheme(repo.prefs.settings.value.theme) {
                 var text by remember { mutableStateOf(shared.lines().firstOrNull().orEmpty().take(200)) }
                 val parsed = remember(text) { NlParser.parse(text, LocalDate.now(), LocalTime.now(), order) }
                 val focus = remember { FocusRequester() }

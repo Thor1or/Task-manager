@@ -45,6 +45,9 @@ fun TimerBar(vm: AppViewModel, onPick: () -> Unit) {
     val running by vm.running.collectAsStateWithLifecycle()
     val groups by vm.groups.collectAsStateWithLifecycle()
 
+    var editing by remember { mutableStateOf(false) }
+    running?.let { if (editing) EntryDialog(it, groups, vm) { editing = false } }
+
     Surface(tonalElevation = 6.dp) {
         val e = running
         if (e == null) {
@@ -69,7 +72,8 @@ fun TimerBar(vm: AppViewModel, onPick: () -> Unit) {
             ) {
                 Dot(groupColor(groups, e.groupId))
                 Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
+                // Tap to correct when it started, rename it or change its group.
+                Column(Modifier.weight(1f).clickable { editing = true }) {
                     Text(e.title.ifBlank { "Timer" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         elapsedLabel(now - e.startMs),
@@ -142,6 +146,7 @@ fun TimerPicker(vm: AppViewModel, onClose: () -> Unit) {
                     onValueChange = { text = it },
                     singleLine = true,
                     label = { Text("What are you doing?") },
+                    placeholder = { Text("Reading #home") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 GroupChips(groups, groupId, "No group") { groupId = it }
@@ -173,7 +178,14 @@ fun TimerPicker(vm: AppViewModel, onClose: () -> Unit) {
         confirmButton = {
             Button(
                 enabled = text.isNotBlank(),
-                onClick = { start(Pick(text.trim(), "", groupId = groupId)) },
+                onClick = {
+                    // "#name" or "@name" in the text files the entry under that group.
+                    val tag = Regex("(?:^|\\s)[#@]([\\p{L}\\p{N}_-]+)").find(text)
+                    val title = (if (tag != null) text.removeRange(tag.range) else text).trim().replace(Regex("\\s+"), " ")
+                    val chosen = groupId
+                    vm.act { startTimer(title.ifBlank { text.trim() }, groupId = groupIdFor(tag?.groupValues?.get(1)) ?: chosen) }
+                    onClose()
+                },
             ) { Text("Start") }
         },
         dismissButton = { OutlinedButton(onClick = onClose) { Text("Cancel") } },

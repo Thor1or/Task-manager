@@ -200,25 +200,49 @@ fun StatsScreen(vm: AppViewModel) {
 
 /** Rename a time entry or file it under a group afterwards. */
 @Composable
-private fun EntryDialog(entry: TimeEntry, groups: List<GroupEntity>, vm: AppViewModel, onClose: () -> Unit) {
+fun EntryDialog(entry: TimeEntry, groups: List<GroupEntity>, vm: AppViewModel, onClose: () -> Unit) {
     var title by remember { mutableStateOf(entry.title) }
     var groupId by remember { mutableStateOf(entry.groupId) }
+    val zone = ZoneId.systemDefault()
+    val dayStart = Instant.ofEpochMilli(entry.startMs).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli()
+    fun clock(ms: Long) = NlParser.formatClock(((ms - dayStart) / 60_000).toInt())
+    var startText by remember { mutableStateOf(clock(entry.startMs)) }
+    var endText by remember { mutableStateOf(entry.endMs?.let(::clock) ?: "") }
+    val startMin = NlParser.parseClock(startText)
+    val endMin = NlParser.parseClock(endText)
+    // An end before the start means the entry ran past midnight.
+    val endMs = endMin?.let { dayStart + (if (startMin != null && it <= startMin) it + 1440 else it) * 60_000L }
+    val endOk = if (endText.isBlank()) entry.endMs == null else endMin != null
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Time entry") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        startText, { startText = it }, label = { Text("Started") }, singleLine = true,
+                        isError = startMin == null, modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        endText, { endText = it }, label = { Text("Ended") }, singleLine = true,
+                        placeholder = { Text(if (entry.endMs == null) "running" else "") },
+                        isError = !endOk, modifier = Modifier.weight(1f),
+                    )
+                }
                 GroupChips(groups, groupId, "No group") { groupId = it }
                 TextButton(onClick = { vm.act { deleteEntry(entry) }; onClose() }) { Text("Delete") }
             }
         },
         confirmButton = {
-            Button(onClick = {
+            Button(enabled = startMin != null && endOk, onClick = {
+                val newStart = dayStart + (startMin ?: 0) * 60_000L
+                val timesChanged = startText != clock(entry.startMs) || endText != (entry.endMs?.let(::clock) ?: "")
                 vm.act {
                     // Keep whatever the timer wrote meanwhile (it may have been stopped).
-                    val current = dao.entriesNow().firstOrNull { it.id == entry.id } ?: return@act
+                    val current = dao.entry(entry.id) ?: return@act
                     saveEntry(current.copy(title = title.trim(), groupId = groupId))
+                    if (timesChanged) setEntryTimes(entry.id, newStart, endMs)
                 }
                 onClose()
             }) { Text("Save") }

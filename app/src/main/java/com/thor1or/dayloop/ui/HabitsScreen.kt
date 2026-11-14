@@ -210,6 +210,8 @@ private fun HabitDialog(
     var targetText by remember { mutableStateOf(if (habit.targetMin > 0) habit.targetMin.toString() else "") }
     var planText by remember { mutableStateOf(NlParser.formatDuration(habit.planMin)) }
     var groupId by remember { mutableStateOf(habit.groupId) }
+    var sessionsText by remember { mutableStateOf(habit.sessions.toString()) }
+    val sessions = sessionsText.trim().toIntOrNull()?.takeIf { it in 1..8 }
 
     val reminderMin = NlParser.parseClock(reminder)
     val reminderOk = reminder.isBlank() || reminderMin != null
@@ -259,8 +261,13 @@ private fun HabitDialog(
                         isError = planMin == null, modifier = Modifier.weight(1f),
                     )
                 }
+                OutlinedTextField(
+                    sessionsText, { sessionsText = it }, label = { Text("Sessions per day") }, singleLine = true,
+                    isError = sessions == null, modifier = Modifier.fillMaxWidth(),
+                )
                 Text(
-                    "With a timed goal (say 20m) the habit ticks itself once that much time is tracked in a day.",
+                    "With a timed goal (say 2h) the habit ticks itself once that much time is tracked in a day. " +
+                        "With 2 sessions it goes on the plan as two activities of half the length; both count.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -272,11 +279,12 @@ private fun HabitDialog(
         },
         confirmButton = {
             Button(
-                enabled = name.isNotBlank() && reminderOk && targetMin != null && planMin != null && mask != 0,
+                enabled = name.isNotBlank() && reminderOk && targetMin != null && planMin != null && mask != 0 && sessions != null,
                 onClick = {
                     val edited = habit.copy(
                         name = name.trim(), daysMask = mask, reminderMinute = reminderMin,
                         targetMin = targetMin ?: 0, planMin = planMin ?: 30, groupId = groupId,
+                        sessions = sessions ?: 1,
                     )
                     vm.act { saveHabit(edited) }
                     onClose()

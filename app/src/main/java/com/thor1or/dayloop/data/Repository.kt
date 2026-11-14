@@ -58,6 +58,7 @@ class Repository(
             dueMinute = p.time?.let { it.hour * 60 + it.minute },
             durationMin = p.durationMin,
             recurrence = p.recurrence?.encode(),
+            priority = p.priority ?: 4,
         )
         val id = dao.putTask(t)
         reminders.task(t.copy(id = id))
@@ -174,19 +175,49 @@ class Repository(
             val start = b.actualStart ?: minuteOfDay(b.day, e.startMs)
             dao.putBlock(b.copy(actualStart = start, actualEnd = max(start + 1, minuteOfDay(b.day, now))))
         }
-        val day = LocalDate.ofInstant(java.time.Instant.ofEpochMilli(e.startMs), ZoneId.systemDefault()).toEpochDay()
-        if (complete) {
-            e.taskId?.let { setTaskDone(it, true) }
-            e.habitId?.let { setHabitChecked(it, day, true) }
-        } else if (e.habitId != null) {
-            // A timed habit completes itself once enough time is tracked that day.
-            val h = dao.habit(e.habitId)
-            if (h != null && h.targetMin > 0) {
-                val from = startOfDayMs(day)
-                val tracked = dao.habitEntries(h.id, from, from + 86_400_000L)
-                    .sumOf { (it.endMs ?: now) - it.startMs } / 60_000
-                if (tracked >= h.targetMin) setHabitChecked(h.id, day, true)
-            }
+        val day = dayOf(e.startMs)
+        // An activity split into several sessions only counts as finished with its last one.
+        val block = e.blockId?.let { dao.block(it) }
+        val open = dao.blocksNow(block?.day ?: day).filter { it.actualEnd == null && it.id != e.blockId }
+        if (complete && e.taskId != null && open.none { it.taskId == e.taskId }) setTaskDone(e.taskId, true)
+        if (e.habitId != null) {
+            val lastSession = complete && open.none { it.habitId == e.habitId }
+            if (lastSession || timedGoalReached(e.habitId, day)) setHabitChecked(e.habitId, day, true)
+        }
+    }
+
+    private fun dayOf(ms: Long) =
+        LocalDate.ofInstant(java.time.Instant.ofEpochMilli(ms), ZoneId.systemDefault()).toEpochDay()
+
+    /** A timed habit completes itself once enough time is tracked that day, over any number of sessions. */
+    private suspend fun timedGoalReached(habitId: Long, day: Long): Boolean {
+        val h = dao.habit(habitId) ?: return false
+        if (h.targetMin <= 0) return false
+        val from = startOfDayMs(day)
+        val now = System.currentTimeMillis()
+        val tracked = dao.habitEntries(h.id, from, from + 86_400_000L).sumOf { (it.endMs ?: now) - it.startMs } / 60_000
+        return tracked >= h.targetMin
+    }
+
+    /**
+     * Corrects when a time entry started and ended (null = still running). The plan activity it
+     * belongs to follows.
+     */
+    suspend fun setEntryTimes(id: Long, startMs: Long, endMs: Long?) {
+        val e = dao.entry(id) ?: return
+        val wasRunning = e.endMs == null
+        val updated = e.copy(startMs = startMs, endMs = endMs)
+        dao.putEntry(updated)
+        if (wasRunning) {
+            if (endMs == null) Notifications.showTimer(context, updated) else Notifications.cancel(context, Notifications.TIMER_ID)
+        }
+        e.blockId?.let { dao.block(it) }?.let { b ->
+            val start = minuteOfDay(b.day, startMs)
+            dao.putBlock(b.copy(actualStart = start, actualEnd = endMs?.let { max(start + 1, minuteOfDay(b.day, it)) }))
+            sortStarted(b.day)
+        }
+        if (endMs != null && e.habitId != null && timedGoalReached(e.habitId, dayOf(startMs))) {
+            setHabitChecked(e.habitId, dayOf(startMs), true)
         }
     }
 
@@ -208,20 +239,80 @@ class Repository(
      */
     suspend fun addBlock(b: PlanBlock) {
         val blocks = dao.blocksNow(b.day)
-        var at = blocks.size
-        if (b.fixedStart != null && b.day != PlanBlock.TEMPLATE_DAY) {
-            val s = prefs.settings.value
-            val slots = PlanEngine.compute(engineBlocks(blocks), s.dayStart, s.dayEnd).slots
-            val i = slots.indexOfFirst { it.state == PlanEngine.State.PENDING && it.start >= b.fixedStart }
-            if (i >= 0) at = i
-        }
+        val at = if (b.day == PlanBlock.TEMPLATE_DAY) blocks.size else indexFor(blocks, b.fixedStart)
         val ordered = blocks.toMutableList().apply { add(at, b.copy(id = 0)) }
         ordered.forEachIndexed { i, x ->
             if (x.id == 0L) dao.putBlock(x.copy(position = i)) else if (x.position != i) dao.putBlock(x.copy(position = i))
         }
     }
 
+    /** Where an activity with this fixed start belongs among [blocks]; the end when it has none. */
+    private fun indexFor(blocks: List<PlanBlock>, fixedStart: Int?): Int {
+        if (fixedStart == null) return blocks.size
+        val s = prefs.settings.value
+        val slots = PlanEngine.compute(engineBlocks(blocks), s.dayStart, s.dayEnd).slots
+        val i = slots.indexOfFirst { it.state == PlanEngine.State.PENDING && it.start >= fixedStart }
+        return if (i >= 0) i else blocks.size
+    }
+
     suspend fun saveBlock(b: PlanBlock) = dao.putBlock(b)
+
+    /** Pins a waiting activity to [fixedStart] and moves it to where that time falls in the day. */
+    suspend fun moveBlockToTime(id: Long, fixedStart: Int) {
+        val b = dao.block(id) ?: return
+        if (b.actualStart != null) return
+        val rest = dao.blocksNow(b.day).filter { it.id != id }
+        val ordered = rest.toMutableList().apply { add(indexFor(rest, fixedStart), b.copy(fixedStart = fixedStart)) }
+        dao.updateBlocks(ordered.mapIndexed { i, x -> x.copy(position = i) })
+    }
+
+    /** Splits a waiting activity into [parts] equal sessions that all count towards the same task or habit. */
+    suspend fun splitBlock(id: Long, parts: Int) {
+        val b = dao.block(id) ?: return
+        if (parts < 2 || b.actualStart != null) return
+        val each = max(5, b.desiredMin / parts)
+        val blocks = dao.blocksNow(b.day).toMutableList()
+        val i = blocks.indexOfFirst { it.id == id }
+        blocks[i] = b.copy(desiredMin = each)
+        repeat(parts - 1) { blocks.add(i + 1, b.copy(id = 0, desiredMin = each, fixedStart = null)) }
+        blocks.forEachIndexed { k, x -> dao.putBlock(x.copy(position = k)) }
+    }
+
+    /** Started activities first, in the order they really happened; the rest keep their order. */
+    private suspend fun sortStarted(day: Long) {
+        val blocks = dao.blocksNow(day)
+        val ordered = blocks.filter { it.actualStart != null }.sortedBy { it.actualStart } +
+            blocks.filter { it.actualStart == null }
+        dao.updateBlocks(ordered.mapIndexed { i, x -> x.copy(position = i) })
+    }
+
+    /**
+     * Sets when an activity really started and ended, after the fact. No start means it has not
+     * happened; a start without an end makes it the running activity (whatever else was running
+     * is stopped). The time entry behind it is created or corrected to match.
+     */
+    suspend fun setBlockTimes(id: Long, start: Int?, end: Int?) {
+        val b = dao.block(id) ?: return
+        val entry = dao.entryForBlock(id)
+        val running = dao.runningNow()
+        if (start == null) {
+            if (entry != null) deleteEntry(entry)
+            dao.putBlock(b.copy(actualStart = null, actualEnd = null))
+            return
+        }
+        if (end == null && running != null && running.id != entry?.id) stopTimer(complete = false)
+        val base = startOfDayMs(b.day)
+        val e = (entry ?: TimeEntry(title = b.title, taskId = b.taskId, habitId = b.habitId, groupId = b.groupId, blockId = id, startMs = 0))
+            .copy(startMs = base + start * 60_000L, endMs = end?.let { base + max(start + 1, it) * 60_000L })
+        val saved = e.copy(id = dao.putEntry(e))
+        when {
+            end == null -> Notifications.showTimer(context, saved)
+            entry != null && running?.id == entry.id -> Notifications.cancel(context, Notifications.TIMER_ID)
+        }
+        dao.block(id)?.let { dao.putBlock(it.copy(actualStart = start, actualEnd = end?.let { x -> max(start + 1, x) })) }
+        sortStarted(b.day)
+        if (end != null && b.habitId != null && timedGoalReached(b.habitId, b.day)) setHabitChecked(b.habitId, b.day, true)
+    }
 
     suspend fun deleteBlock(b: PlanBlock) {
         if (dao.runningNow()?.blockId == b.id) stopTimer(complete = false)
@@ -245,12 +336,6 @@ class Repository(
 
     suspend fun beginBlock(b: PlanBlock) = startTimer(b.title, b.taskId, b.habitId, b.groupId, b.id)
 
-    /** Puts a started or finished activity back to "not started". */
-    suspend fun resetBlock(b: PlanBlock) {
-        if (dao.runningNow()?.blockId == b.id) stopTimer(complete = false)
-        dao.block(b.id)?.let { dao.putBlock(it.copy(actualStart = null, actualEnd = null)) }
-    }
-
     suspend fun addTasksToPlan(day: Long, tasks: List<Task>) {
         val have = dao.blocksNow(day).mapNotNull { it.taskId }.toSet()
         tasks.filter { it.id !in have }.forEach { t ->
@@ -270,13 +355,18 @@ class Repository(
         val bit = 1 shl (LocalDate.ofEpochDay(day).dayOfWeek.value - 1)
         val due = dao.habitsNow().filter { !it.archived && it.daysMask and bit != 0 && it.id !in have }
         due.sortedBy { it.reminderMinute ?: Int.MAX_VALUE }.forEach { h ->
-            addBlock(
-                PlanBlock(
-                    day = day, position = 0, title = h.name, habitId = h.id, groupId = h.groupId,
-                    desiredMin = if (h.targetMin > 0) h.targetMin else h.planMin,
-                    fixedStart = h.reminderMinute,
+            // A habit done in several sessions gets one activity per session.
+            val sessions = h.sessions.coerceIn(1, 8)
+            val total = if (h.targetMin > 0) h.targetMin else h.planMin
+            repeat(sessions) { n ->
+                addBlock(
+                    PlanBlock(
+                        day = day, position = 0, title = h.name, habitId = h.id, groupId = h.groupId,
+                        desiredMin = max(5, total / sessions),
+                        fixedStart = h.reminderMinute.takeIf { n == 0 },
+                    )
                 )
-            )
+            }
         }
         return due.size
     }
