@@ -31,6 +31,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -152,6 +153,21 @@ fun SettingsScreen(vm: AppViewModel) {
                 prefs.update { it.copy(eveningPrompt = v) }
                 vm.repo.reminders.prompts(prefs.settings.value)
             }
+        }
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Alert when time is up")
+                Text(
+                    "A notification when the planned time of the running activity ends. " +
+                        "When off, it can still be turned on for single activities.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(settings.alertAtEnd, { on ->
+                prefs.update { it.copy(alertAtEnd = on) }
+                vm.act { refreshBlockAlarm() }
+            })
         }
         Text(
             "Leave a prompt empty to turn it off.",

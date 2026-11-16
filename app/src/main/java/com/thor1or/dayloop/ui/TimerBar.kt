@@ -55,12 +55,14 @@ fun TimerBar(vm: AppViewModel, onPick: () -> Unit) {
                 Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onPick)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(start = 16.dp, end = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(12.dp))
-                Text("Start a timer", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Start a timer", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Ends the day: the sleep timer runs until "Wake up".
+                TextButton(onClick = { vm.act { startSleep() } }) { Text("Sleep") }
             }
         } else {
             val now by rememberNow(1000)
@@ -74,14 +76,18 @@ fun TimerBar(vm: AppViewModel, onPick: () -> Unit) {
                 Spacer(Modifier.width(10.dp))
                 // Tap to correct when it started, rename it or change its group.
                 Column(Modifier.weight(1f).clickable { editing = true }) {
-                    Text(e.title.ifBlank { "Timer" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (e.sleep) "Sleeping" else e.title.ifBlank { "Timer" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         elapsedLabel(now - e.startMs),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                TextButton(onClick = { vm.act { stopTimer(complete = false) } }) { Text("Stop") }
+                if (e.sleep) {
+                    Button(onClick = { vm.act { stopTimer(complete = false) } }) { Text("Wake up") }
+                } else {
+                    TextButton(onClick = { vm.act { stopTimer(complete = false) } }) { Text("Stop") }
+                }
                 if (e.taskId != null || e.habitId != null) {
                     Button(onClick = { vm.act { stopTimer(complete = true) } }) { Text("Done") }
                 }
@@ -124,9 +130,9 @@ fun TimerPicker(vm: AppViewModel, onClose: () -> Unit) {
         planned +
             habits.filter { it.daysMask and bit != 0 && it.id !in onPlanHabits }
                 .map { Pick(it.name, "Habit", habitId = it.id, groupId = it.groupId) } +
-            tasks.filter { !it.done && it.dueDay != null && it.dueDay <= day && it.id !in onPlanTasks }
+            tasks.filter { !it.done && it.parentId == null && it.dueDay != null && it.dueDay <= day && it.id !in onPlanTasks }
                 .map { Pick(it.title, "Task", taskId = it.id, groupId = it.groupId) } +
-            entries.filter { it.taskId == null && it.habitId == null && it.title.isNotBlank() }
+            entries.filter { !it.sleep && it.taskId == null && it.habitId == null && it.title.isNotBlank() }
                 .distinctBy { it.title.lowercase() }.take(8)
                 .map { Pick(it.title, "Recent", groupId = it.groupId) }
     }

@@ -162,4 +162,18 @@ class NlParserTest {
         assertEquals("home", p("#home water plants").group)
         assertEquals("mail a@b.com", p("mail a@b.com").title)
     }
+
+    @Test fun shortDayNames() {
+        assertEquals(today.plusDays(1), p("buy bread tom").date)
+        assertEquals("buy bread", p("buy bread Tom").title)
+        assertEquals(today.plusDays(1), p("buy bread tom 9am").date)
+        assertEquals(today.plusDays(1), p("buy bread tom 0900 p2 #home").date)
+        assertEquals(LocalDate.of(2026, 11, 18), p("gym wed").date)
+        assertEquals(LocalDate.of(2026, 11, 14), p("market sat 10am for 1h").date)
+        assertEquals(today, p("call bank tod").date)
+        // Mid-sentence they stay ordinary words.
+        assertNull(p("buy sun cream").date)
+        assertNull(p("ask Tom about the report").date)
+        assertEquals("ask Tom about the report", p("ask Tom about the report").title)
+    }
 }

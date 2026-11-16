@@ -70,9 +70,17 @@ class Repository(
         reminders.task(t)
     }
 
+    suspend fun addSubtask(parentId: Long, title: String) {
+        val parent = dao.task(parentId) ?: return
+        dao.putTask(Task(title = title.trim(), parentId = parentId, groupId = parent.groupId))
+        // A finished task that gains a new step is open again.
+        if (parent.done) setTaskDone(parentId, false)
+    }
+
     suspend fun deleteTask(id: Long) {
         reminders.cancelTask(id)
         Notifications.cancel(context, Notifications.taskNotificationId(id))
+        dao.deleteSubtasks(id)
         dao.deleteTask(id)
     }
 
@@ -89,10 +97,25 @@ class Repository(
         dao.putTask(updated)
         reminders.task(updated)
         Notifications.cancel(context, Notifications.taskNotificationId(id))
+        val subtasks = if (t.parentId == null) dao.subtasks(id) else emptyList()
         if (rec != null) {
             val from = maxOf(t.dueDay?.let(LocalDate::ofEpochDay) ?: today(), today())
             val next = t.copy(id = 0, dueDay = rec.next(from).toEpochDay(), createdAt = System.currentTimeMillis())
-            reminders.task(next.copy(id = dao.putTask(next)))
+            val nextId = dao.putTask(next)
+            reminders.task(next.copy(id = nextId))
+            // The next occurrence starts with the same steps, all open.
+            subtasks.forEach { dao.putTask(it.copy(id = 0, parentId = nextId, done = false, doneAt = null)) }
+        }
+        // Finishing a task finishes whatever steps were still open.
+        if (done) subtasks.filter { !it.done }.forEach { dao.putTask(it.copy(done = true, doneAt = updated.doneAt)) }
+
+        val parent = t.parentId?.let { dao.task(it) } ?: return
+        if (done && !parent.done && dao.subtasks(parent.id).all { it.done }) {
+            // The last step: the task itself is done, and a timer running on it stops.
+            if (dao.runningNow()?.taskId == parent.id) stopTimer(complete = true)
+            setTaskDone(parent.id, true)
+        } else if (!done && parent.done) {
+            setTaskDone(parent.id, false)
         }
     }
 
@@ -137,22 +160,31 @@ class Repository(
         habitId: Long? = null,
         groupId: Long? = null,
         blockId: Long? = null,
+        sleep: Boolean = false,
     ) {
         stopTimer(complete = false)
         val now = System.currentTimeMillis()
         val day = today().toEpochDay()
         val blocks = dao.blocksNow(day)
-        val block = blocks.firstOrNull { it.id == blockId } ?: blocks.firstOrNull {
+        val planned = blocks.firstOrNull { it.id == blockId } ?: blocks.firstOrNull {
             it.actualStart == null &&
                 ((taskId != null && it.taskId == taskId) || (habitId != null && it.habitId == habitId))
         }.takeIf { blockId == null }
-        if (block != null) {
+        var block = planned
+        if (!sleep) {
+            // Something timed that was not on the plan is put on it, so the day shows what happened.
+            val begun = (planned ?: PlanBlock(
+                day = day, position = 0, title = title, taskId = taskId, habitId = habitId, groupId = groupId,
+                desiredMin = taskId?.let { dao.task(it)?.durationMin } ?: 30, adhoc = true,
+            )).copy(actualStart = max(0, minuteOfDay(day, now)), actualEnd = null)
             // The activity moves up to follow whatever has already been started.
-            val rest = blocks.filter { it.id != block.id }
+            val rest = blocks.filter { it.id != begun.id }
             val at = rest.indexOfLast { it.actualStart != null } + 1
-            val begun = block.copy(actualStart = max(0, minuteOfDay(day, now)), actualEnd = null)
             val ordered = rest.toMutableList().apply { add(at, begun) }
-            dao.updateBlocks(ordered.mapIndexed { i, b -> b.copy(position = i) })
+            ordered.forEachIndexed { i, b ->
+                if (b === begun) block = begun.copy(id = dao.putBlock(b.copy(position = i)).takeIf { begun.id == 0L } ?: begun.id)
+                else if (b.position != i) dao.putBlock(b.copy(position = i))
+            }
         }
         val entry = TimeEntry(
             title = title,
@@ -161,8 +193,32 @@ class Repository(
             groupId = groupId ?: block?.groupId,
             blockId = block?.id,
             startMs = now,
+            sleep = sleep,
         )
         Notifications.showTimer(context, entry.copy(id = dao.putEntry(entry)))
+        refreshBlockAlarm()
+    }
+
+    /** Ends the day: whatever is running stops and the sleep timer starts. "Wake up" stops it. */
+    suspend fun startSleep() = startTimer("Sleep", sleep = true)
+
+    /**
+     * Lines up the alert for the moment the running activity's planned time is up, or removes
+     * it when nothing calls for one. Activities that were not planned never alert.
+     */
+    suspend fun refreshBlockAlarm() {
+        val e = dao.runningNow()
+        val b = e?.blockId?.let { dao.block(it) }
+        val s = prefs.settings.value
+        if (b == null || b.adhoc || b.actualStart == null || !(s.alertAtEnd || b.alarm)) {
+            reminders.cancelBlockEnd()
+            return
+        }
+        val now = System.currentTimeMillis()
+        val slot = PlanEngine.compute(engineBlocks(dao.blocksNow(b.day)), s.dayStart, s.dayEnd, minuteOfDay(b.day, now))
+            .slots.firstOrNull { it.id == b.id }
+        val end = startOfDayMs(b.day) + (slot?.end ?: 0) * 60_000L
+        if (slot != null && end > now) reminders.blockEnd(end, b.id) else reminders.cancelBlockEnd()
     }
 
     /** Stops the running timer; with [complete] the linked task or habit is ticked off as well. */
@@ -171,6 +227,8 @@ class Repository(
         val now = System.currentTimeMillis()
         dao.putEntry(e.copy(endMs = now))
         Notifications.cancel(context, Notifications.TIMER_ID)
+        Notifications.cancel(context, Notifications.TIME_UP_ID)
+        reminders.cancelBlockEnd()
         e.blockId?.let { dao.block(it) }?.let { b ->
             val start = b.actualStart ?: minuteOfDay(b.day, e.startMs)
             dao.putBlock(b.copy(actualStart = start, actualEnd = max(start + 1, minuteOfDay(b.day, now))))
@@ -219,6 +277,7 @@ class Repository(
         if (endMs != null && e.habitId != null && timedGoalReached(e.habitId, dayOf(startMs))) {
             setHabitChecked(e.habitId, dayOf(startMs), true)
         }
+        refreshBlockAlarm()
     }
 
     suspend fun saveEntry(e: TimeEntry) = dao.putEntry(e)
@@ -239,7 +298,7 @@ class Repository(
      */
     suspend fun addBlock(b: PlanBlock) {
         val blocks = dao.blocksNow(b.day)
-        val at = if (b.day == PlanBlock.TEMPLATE_DAY) blocks.size else indexFor(blocks, b.fixedStart)
+        val at = if (b.day < 0) blocks.size else indexFor(blocks, b.fixedStart)
         val ordered = blocks.toMutableList().apply { add(at, b.copy(id = 0)) }
         ordered.forEachIndexed { i, x ->
             if (x.id == 0L) dao.putBlock(x.copy(position = i)) else if (x.position != i) dao.putBlock(x.copy(position = i))
@@ -255,7 +314,33 @@ class Repository(
         return if (i >= 0) i else blocks.size
     }
 
-    suspend fun saveBlock(b: PlanBlock) = dao.putBlock(b)
+    suspend fun saveBlock(b: PlanBlock) {
+        dao.putBlock(b)
+        refreshBlockAlarm()
+    }
+
+    /** Puts the day's activities in the given order (by id). Started ones stay first. */
+    suspend fun reorderBlocks(day: Long, ids: List<Long>) {
+        val rank = ids.withIndex().associate { it.value to it.index }
+        val ordered = dao.blocksNow(day).sortedBy { rank[it.id] ?: Int.MAX_VALUE }
+        dao.updateBlocks(ordered.mapIndexed { i, x -> x.copy(position = i) })
+        sortStarted(day)
+        refreshBlockAlarm()
+    }
+
+    /**
+     * Undoes a finished activity: [resume] makes it the running one again, otherwise it goes
+     * back to "not started". The task or habit it ticked off is open again too.
+     */
+    suspend fun reopenBlock(id: Long, resume: Boolean) {
+        val b = dao.block(id) ?: return
+        val start = b.actualStart ?: return
+        if (b.actualEnd != null) {
+            b.taskId?.let { setTaskDone(it, false) }
+            b.habitId?.let { setHabitChecked(it, b.day, false) }
+        }
+        setBlockTimes(id, start.takeIf { resume }, null)
+    }
 
     /** Pins a waiting activity to [fixedStart] and moves it to where that time falls in the day. */
     suspend fun moveBlockToTime(id: Long, fixedStart: Int) {
@@ -312,6 +397,7 @@ class Repository(
         dao.block(id)?.let { dao.putBlock(it.copy(actualStart = start, actualEnd = end?.let { x -> max(start + 1, x) })) }
         sortStarted(b.day)
         if (end != null && b.habitId != null && timedGoalReached(b.habitId, b.day)) setHabitChecked(b.habitId, b.day, true)
+        refreshBlockAlarm()
     }
 
     suspend fun deleteBlock(b: PlanBlock) {
@@ -371,20 +457,29 @@ class Repository(
         return due.size
     }
 
-    suspend fun saveTemplate(day: Long) {
-        dao.deleteBlocks(PlanBlock.TEMPLATE_DAY)
+    /** Saves the day's plan under [name]; a template with that name is replaced. */
+    suspend fun saveTemplate(day: Long, name: String, daysMask: Int) {
+        val existing = dao.templatesNow().firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
+        val template = (existing ?: Template(name = name.trim())).copy(daysMask = daysMask)
+        val saved = template.copy(id = dao.putTemplate(template).takeIf { template.id == 0L } ?: template.id)
+        dao.deleteBlocks(saved.day)
         dao.blocksNow(day).forEachIndexed { i, b ->
             dao.putBlock(
-                b.copy(id = 0, day = PlanBlock.TEMPLATE_DAY, position = i, taskId = null, actualStart = null, actualEnd = null)
+                b.copy(id = 0, day = saved.day, position = i, taskId = null, actualStart = null, actualEnd = null, adhoc = false)
             )
         }
     }
 
-    suspend fun loadTemplate(day: Long): Int {
-        val template = dao.blocksNow(PlanBlock.TEMPLATE_DAY)
+    suspend fun loadTemplate(day: Long, template: Template): Int {
+        val blocks = dao.blocksNow(template.day)
         val base = dao.blocksNow(day).size
-        template.forEachIndexed { i, b -> dao.putBlock(b.copy(id = 0, day = day, position = base + i)) }
-        return template.size
+        blocks.forEachIndexed { i, b -> dao.putBlock(b.copy(id = 0, day = day, position = base + i)) }
+        return blocks.size
+    }
+
+    suspend fun deleteTemplate(template: Template) {
+        dao.deleteBlocks(template.day)
+        dao.deleteTemplate(template.id)
     }
 
     /** Copies the day's timed calendar events in as fixed, rigid activities. Needs READ_CALENDAR. */
@@ -430,6 +525,7 @@ class Repository(
         dao.habitsNow().forEach { reminders.habit(it) }
         reminders.prompts(prefs.settings.value)
         dao.runningNow()?.let { Notifications.showTimer(context, it) }
+        refreshBlockAlarm()
     }
 
     companion object {

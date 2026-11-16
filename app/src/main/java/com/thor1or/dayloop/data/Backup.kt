@@ -24,7 +24,7 @@ object Backup {
                 .put("dueMinute", it.dueMinute ?: JSONObject.NULL).put("durationMin", it.durationMin ?: JSONObject.NULL)
                 .put("recurrence", it.recurrence ?: JSONObject.NULL).put("someday", it.someday)
                 .put("done", it.done).put("doneAt", it.doneAt ?: JSONObject.NULL).put("createdAt", it.createdAt)
-                .put("priority", it.priority)
+                .put("priority", it.priority).put("parentId", it.parentId ?: JSONObject.NULL)
         })
         put("habits", arr(dao.habitsNow()) {
             JSONObject().put("id", it.id).put("name", it.name).put("groupId", it.groupId ?: JSONObject.NULL)
@@ -37,7 +37,7 @@ object Backup {
             JSONObject().put("id", it.id).put("title", it.title).put("taskId", it.taskId ?: JSONObject.NULL)
                 .put("habitId", it.habitId ?: JSONObject.NULL).put("groupId", it.groupId ?: JSONObject.NULL)
                 .put("blockId", it.blockId ?: JSONObject.NULL).put("startMs", it.startMs)
-                .put("endMs", it.endMs ?: JSONObject.NULL)
+                .put("endMs", it.endMs ?: JSONObject.NULL).put("sleep", it.sleep)
         })
         put("blocks", arr(dao.allBlocksNow()) {
             JSONObject().put("id", it.id).put("day", it.day).put("position", it.position).put("title", it.title)
@@ -45,7 +45,9 @@ object Backup {
                 .put("groupId", it.groupId ?: JSONObject.NULL).put("desiredMin", it.desiredMin)
                 .put("fixedStart", it.fixedStart ?: JSONObject.NULL).put("rigid", it.rigid)
                 .put("actualStart", it.actualStart ?: JSONObject.NULL).put("actualEnd", it.actualEnd ?: JSONObject.NULL)
+                .put("alarm", it.alarm).put("adhoc", it.adhoc)
         })
+        put("templates", arr(dao.templatesNow()) { JSONObject().put("id", it.id).put("name", it.name).put("daysMask", it.daysMask) })
     }.toString(1)
 
     /** Replaces all data with the contents of [json]. Throws when the file is not a backup. */
@@ -59,7 +61,7 @@ object Backup {
                 it.getLong("id"), it.getString("title"), it.optString("notes"), it.longOrNull("groupId"),
                 it.longOrNull("dueDay"), it.intOrNull("dueMinute"), it.intOrNull("durationMin"),
                 it.strOrNull("recurrence"), it.optBoolean("someday"), it.optBoolean("done"),
-                it.longOrNull("doneAt"), it.getLong("createdAt"), it.optInt("priority", 4),
+                it.longOrNull("doneAt"), it.getLong("createdAt"), it.optInt("priority", 4), it.longOrNull("parentId"),
             )
         }
         val habits = root.getJSONArray("habits").objects().map {
@@ -74,6 +76,7 @@ object Backup {
             TimeEntry(
                 it.getLong("id"), it.getString("title"), it.longOrNull("taskId"), it.longOrNull("habitId"),
                 it.longOrNull("groupId"), it.longOrNull("blockId"), it.getLong("startMs"), it.longOrNull("endMs"),
+                it.optBoolean("sleep"),
             )
         }
         val blocks = root.getJSONArray("blocks").objects().map {
@@ -81,10 +84,14 @@ object Backup {
                 it.getLong("id"), it.getLong("day"), it.getInt("position"), it.getString("title"),
                 it.longOrNull("taskId"), it.longOrNull("habitId"), it.longOrNull("groupId"),
                 it.getInt("desiredMin"), it.intOrNull("fixedStart"), it.optBoolean("rigid"),
-                it.intOrNull("actualStart"), it.intOrNull("actualEnd"),
+                it.intOrNull("actualStart"), it.intOrNull("actualEnd"), it.optBoolean("alarm"), it.optBoolean("adhoc"),
             )
         }
-        dao.wipeGroups(); dao.wipeTasks(); dao.wipeHabits(); dao.wipeChecks(); dao.wipeEntries(); dao.wipeBlocks()
+        // Backups from before named templates keep their one template on day -1.
+        val templates = root.optJSONArray("templates")?.objects()?.map { Template(it.getLong("id"), it.getString("name"), it.optInt("daysMask")) }
+            ?: if (blocks.any { it.day == -1L }) listOf(Template(1, "My day", 0)) else emptyList()
+        dao.wipeGroups(); dao.wipeTasks(); dao.wipeHabits(); dao.wipeChecks(); dao.wipeEntries(); dao.wipeBlocks(); dao.wipeTemplates()
+        templates.forEach { dao.putTemplate(it) }
         groups.forEach { dao.putGroup(it) }
         tasks.forEach { dao.putTask(it) }
         habits.forEach { dao.putHabit(it) }

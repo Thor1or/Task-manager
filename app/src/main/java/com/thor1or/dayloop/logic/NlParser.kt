@@ -97,6 +97,11 @@ object NlParser {
     private val monthDayRx = rx("$L(?:on\\s+)?($monthAny)\\s+(\\d{1,2})(?:st|nd|rd|th)?$R(?:,?\\s+((?:19|20)\\d{2})$R)?")
     private val weekdayPrefixedRx = rx("$L(?:on|next|na|no)\\s+($dayAny)$R")
     private val weekdayRx = rx("$L($dayFull)$R")
+    // Short forms ("tom", "wed") are also ordinary words and names, so on their own they only
+    // count where a date usually goes: at the end, or right before a number such as a time.
+    private const val AT_END = "(?=\\s*$|\\s+\\d)"
+    private val shortRelativeRx = rx("$L(tom|tod|tmw)$R$AT_END")
+    private val shortWeekdayRx = rx("$L(${alt(DAY_ABBR)})$R$AT_END")
 
     private fun dayNumber(s: String): Int? {
         val k = s.lowercase()
@@ -238,7 +243,12 @@ object NlParser {
                 setDate(m.groupValues[3].ifEmpty { null }?.toInt(), monthNumber(m.groupValues[1])!!, m.groupValues[2].toInt())
             } ||
             take(weekdayPrefixedRx) { m -> date = upcoming(dayNumber(m.groupValues[1])!!); true } ||
-            take(weekdayRx) { m -> date = upcoming(dayNumber(m.groupValues[1])!!); true }
+            take(weekdayRx) { m -> date = upcoming(dayNumber(m.groupValues[1])!!); true } ||
+            take(shortRelativeRx) { m ->
+                date = if (m.groupValues[1].lowercase() == "tod") today else today.plusDays(1)
+                true
+            } ||
+            take(shortWeekdayRx) { m -> date = upcoming(dayNumber(m.groupValues[1])!!); true }
 
         // --- bare military time, last, so the year of a date is never read as a time ------------
         if (time == null) {

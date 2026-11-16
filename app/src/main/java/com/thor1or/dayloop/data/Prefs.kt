@@ -20,6 +20,8 @@ data class Settings(
     val theme: ThemeMode = ThemeMode.SYSTEM,
     /** The Plan tab shows the day as time blocks instead of a list. */
     val planTimeline: Boolean = false,
+    /** Alert when the planned time of the running activity is up. */
+    val alertAtEnd: Boolean = true,
 )
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
@@ -43,6 +45,7 @@ class Prefs(context: Context) {
         lastBackupDay = sp.getLong("lastBackupDay", 0),
         theme = runCatching { ThemeMode.valueOf(sp.getString("theme", "SYSTEM")!!) }.getOrDefault(ThemeMode.SYSTEM),
         planTimeline = sp.getBoolean("planTimeline", false),
+        alertAtEnd = sp.getBoolean("alertAtEnd", true),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -57,6 +60,7 @@ class Prefs(context: Context) {
             .putLong("lastBackupDay", s.lastBackupDay)
             .putString("theme", s.theme.name)
             .putBoolean("planTimeline", s.planTimeline)
+            .putBoolean("alertAtEnd", s.alertAtEnd)
             .apply()
         state.value = s
     }

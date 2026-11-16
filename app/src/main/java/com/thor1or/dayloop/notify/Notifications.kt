@@ -22,6 +22,7 @@ object Notifications {
     const val TIMER_ID = 9_000_001
     const val MORNING_ID = 9_000_002
     const val EVENING_ID = 9_000_003
+    const val TIME_UP_ID = 9_000_004
 
     const val ACTION_DONE = "com.thor1or.dayloop.DONE"
     const val ACTION_SNOOZE = "com.thor1or.dayloop.SNOOZE"
@@ -112,8 +113,8 @@ object Notifications {
     fun showTimer(context: Context, e: TimeEntry) {
         val b = NotificationCompat.Builder(context, CH_TIMER)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle(e.title.ifBlank { "Timer" })
-            .setContentText("Timer running")
+            .setContentTitle(if (e.sleep) "Sleeping" else e.title.ifBlank { "Timer" })
+            .setContentText(if (e.sleep) "Sleep timer running" else "Timer running")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setWhen(e.startMs)
@@ -121,7 +122,22 @@ object Notifications {
             .setUsesChronometer(true)
             .setCategory(NotificationCompat.CATEGORY_STOPWATCH)
             .setContentIntent(open(context, "plan"))
-            .addAction(0, "Stop", action(context, ACTION_STOP_TIMER, "timer", e.id))
+            .addAction(0, if (e.sleep) "Wake up" else "Stop", action(context, ACTION_STOP_TIMER, "timer", e.id))
         post(context, TIMER_ID, b)
+    }
+
+    /** The planned time of the running activity is over. */
+    fun showTimeUp(context: Context, e: TimeEntry) {
+        val b = NotificationCompat.Builder(context, CH_REMINDERS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle("Time's up: ${e.title}")
+            .setContentText("The time planned for this is over. The timer keeps running until you stop it.")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(open(context, "plan"))
+            .addAction(0, "Done", action(context, ACTION_DONE, "timer", e.id))
+            .addAction(0, "Stop", action(context, ACTION_STOP_TIMER, "timer", e.id))
+        post(context, TIME_UP_ID, b)
     }
 }

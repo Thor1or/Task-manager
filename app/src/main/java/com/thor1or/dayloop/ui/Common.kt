@@ -62,6 +62,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.thor1or.dayloop.data.GroupEntity
+import com.thor1or.dayloop.data.Habit
 import com.thor1or.dayloop.data.ThemeMode
 import com.thor1or.dayloop.logic.NlParser
 import com.thor1or.dayloop.logic.Parsed
@@ -294,6 +295,54 @@ fun Heatmap(today: LocalDate, modifier: Modifier = Modifier, value: (Long) -> Fl
             }
         }
     }
+}
+
+private val DAY_LETTERS = listOf("M", "T", "W", "T", "F", "S", "S")
+
+/** Seven weekday chips for a mask where bit 0 = Monday … bit 6 = Sunday. */
+@Composable
+fun DayChips(mask: Int, onChange: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        DAY_LETTERS.forEachIndexed { i, letter ->
+            FilterChip(
+                selected = mask and (1 shl i) != 0,
+                onClick = { onChange(mask xor (1 shl i)) },
+                label = { Text(letter) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+fun Habit.dueOn(day: Long): Boolean =
+    day >= createdDay && daysMask and (1 shl (LocalDate.ofEpochDay(day).dayOfWeek.value - 1)) != 0
+
+/** Consecutive due days ticked, counting back from today (or from yesterday if today is open). */
+fun currentStreak(h: Habit, checked: Set<Long>, today: Long): Int {
+    var day = today
+    var n = 0
+    if (h.dueOn(day) && day !in checked) day--
+    while (day >= h.createdDay) {
+        if (h.dueOn(day)) {
+            if (day in checked) n++ else break
+        }
+        day--
+    }
+    return n
+}
+
+/** The longest run of due days ticked so far. */
+fun bestStreak(h: Habit, checked: Set<Long>, today: Long): Int {
+    var best = 0
+    var run = 0
+    for (day in h.createdDay..today) {
+        if (!h.dueOn(day)) continue
+        if (day in checked) {
+            run++
+            if (run > best) best = run
+        } else if (day != today) run = 0
+    }
+    return best
 }
 
 @Composable

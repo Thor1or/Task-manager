@@ -60,6 +60,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AssistChip
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
+import com.thor1or.dayloop.data.Template
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thor1or.dayloop.data.GroupEntity
 import com.thor1or.dayloop.data.PlanBlock
@@ -78,7 +88,19 @@ import java.time.ZoneId
 @Composable
 fun PlanScreen(vm: AppViewModel) {
     val day by vm.planDay.collectAsStateWithLifecycle()
-    val blocks by vm.blocks.collectAsStateWithLifecycle()
+    val stored by vm.blocks.collectAsStateWithLifecycle()
+    val templates by vm.templates.collectAsStateWithLifecycle()
+    // While a row is being dragged the list follows the finger; the order is saved on release.
+    var order by remember { mutableStateOf<List<Long>?>(null) }
+    var dragId by remember { mutableStateOf<Long?>(null) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val listState = rememberLazyListState()
+    // Once the saved order arrives, the temporary one is dropped.
+    LaunchedEffect(stored) { if (dragId == null) order = null }
+    val blocks = remember(stored, order) {
+        val rank = order?.withIndex()?.associate { it.value to it.index }
+        if (rank == null) stored else stored.sortedBy { rank[it.id] ?: Int.MAX_VALUE }
+    }
     val settings by vm.settings.collectAsStateWithLifecycle()
     val groups by vm.groups.collectAsStateWithLifecycle()
     val tasks by vm.tasks.collectAsStateWithLifecycle()
@@ -111,6 +133,11 @@ fun PlanScreen(vm: AppViewModel) {
 
     var editing by remember { mutableStateOf<PlanBlock?>(null) }
     var pickingTasks by remember { mutableStateOf(false) }
+    var loadingTemplate by remember { mutableStateOf(false) }
+    var savingTemplate by remember { mutableStateOf(false) }
+    val weekdayBit = 1 shl (date.dayOfWeek.value - 1)
+    // The template meant for this weekday, if one is.
+    val suggested = templates.firstOrNull { it.daysMask and weekdayBit != 0 }
     var menu by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
     val parsed = remember(input, settings.dateOrder) {
@@ -152,10 +179,8 @@ fun PlanScreen(vm: AppViewModel) {
                     item("Add from tasks") { pickingTasks = true }
                     item("Add the day's habits") { vm.act { vm.say("Added ${addHabitsToPlan(day)} habits") } }
                     item("Import calendar events") { calendar.launch(Manifest.permission.READ_CALENDAR) }
-                    item("Load template") {
-                        vm.act { vm.say(if (loadTemplate(day) == 0) "No template saved yet" else "Template added") }
-                    }
-                    item("Save as template") { vm.act { saveTemplate(day); vm.say("Saved as the day template") } }
+                    item("Load template…") { loadingTemplate = true }
+                    item("Save as template…") { savingTemplate = true }
                     item("Clear this plan") { vm.act { clearPlan(day) } }
                 }
             }
@@ -199,7 +224,7 @@ fun PlanScreen(vm: AppViewModel) {
                     editing = PlanBlock(day = day, position = 0, title = "", desiredMin = 30, fixedStart = minute, rigid = true)
                 },
             )
-        } else LazyColumn(Modifier.weight(1f)) {
+        } else LazyColumn(Modifier.weight(1f), state = listState) {
             if (blocks.isEmpty()) {
                 item {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -211,36 +236,106 @@ fun PlanScreen(vm: AppViewModel) {
                         FilledTonalButton(onClick = { vm.act { vm.say("Added ${addHabitsToPlan(day)} habits") } }) {
                             Text("Add the day's habits")
                         }
-                        FilledTonalButton(onClick = {
-                            vm.act { if (loadTemplate(day) == 0) vm.say("No template saved yet") }
-                        }) { Text("Load template") }
+                        if (suggested != null) {
+                            FilledTonalButton(onClick = { vm.act { loadTemplate(day, suggested) } }) {
+                                Text("Load \"${suggested.name}\" template")
+                            }
+                        }
+                        if (templates.any { it.id != suggested?.id }) {
+                            FilledTonalButton(onClick = { loadingTemplate = true }) { Text("Load another template…") }
+                        }
                     }
                 }
             }
             items(blocks, key = { it.id }) { b ->
                 val slot = slots[b.id] ?: return@items
-                if (slot.gapBefore >= 5) {
-                    Text(
-                        "Free · ${NlParser.formatDuration(slot.gapBefore)}",
-                        Modifier.padding(start = 84.dp, top = 4.dp, bottom = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                val dragging = dragId == b.id
+                Column(
+                    (if (dragging) Modifier else Modifier.animateItem())
+                        .zIndex(if (dragging) 1f else 0f)
+                        .graphicsLayer {
+                            translationY = if (dragging) dragY else 0f
+                            shadowElevation = if (dragging) 12f else 0f
+                        }
+                        .then(
+                            // Hold a waiting activity, then drag it up or down.
+                            if (b.actualStart != null) Modifier else Modifier.pointerInput(b.id, day) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        order = stored.map { it.id }
+                                        dragId = b.id
+                                        dragY = 0f
+                                    },
+                                    onDrag = { change, drag ->
+                                        change.consume()
+                                        dragY += drag.y
+                                        val shown = listState.layoutInfo.visibleItemsInfo
+                                        val me = shown.firstOrNull { it.key == b.id }
+                                        val current = order
+                                        if (me != null && current != null) {
+                                            val centre = me.offset + me.size / 2 + dragY.toInt()
+                                            val over = shown.firstOrNull {
+                                                it.key != b.id && it.key is Long && centre in it.offset..it.offset + it.size
+                                            }
+                                            val down = over != null && over.offset > me.offset
+                                            val waiting = over != null && stored.any { it.id == over.key && it.actualStart == null }
+                                            // Swap once the dragged row is past the middle of its neighbour.
+                                            if (over != null && waiting &&
+                                                (if (down) centre > over.offset + over.size / 2 else centre < over.offset + over.size / 2)
+                                            ) {
+                                                val next = current.toMutableList()
+                                                val to = next.indexOf(over.key as Long)
+                                                next.remove(b.id)
+                                                next.add(to, b.id)
+                                                order = next
+                                                // The row now sits where its neighbour was; keep it under the finger.
+                                                dragY += if (down) -over.size else over.size
+                                            }
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val final = order
+                                        dragId = null
+                                        dragY = 0f
+                                        if (final != null) vm.act { reorderBlocks(day, final) }
+                                    },
+                                    onDragCancel = {
+                                        dragId = null
+                                        dragY = 0f
+                                        order = null
+                                    },
+                                )
+                            }
+                        )
+                ) {
+                    if (slot.gapBefore >= 5) {
+                        Text(
+                            "Free · ${NlParser.formatDuration(slot.gapBefore)}",
+                            Modifier.padding(start = 84.dp, top = 4.dp, bottom = 4.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    BlockRow(
+                        block = b,
+                        slot = slot,
+                        idealStart = ideal[b.id],
+                        part = parts[b.id],
+                        steps = b.taskId?.let { id ->
+                            tasks.filter { it.parentId == id }.takeIf { it.isNotEmpty() }
+                                ?.let { list -> "${list.count { it.done }}/${list.size} steps" }
+                        },
+                        onLock = { vm.act { dao.block(b.id)?.let { saveBlock(it.copy(rigid = !it.rigid)) } } },
+                        groups = groups,
+                        canBegin = isToday,
+                        onClick = { editing = b },
+                        onBegin = { vm.act { beginBlock(b) } },
+                        onDone = { vm.act { stopTimer(complete = true) } },
+                        onMove = { delta -> vm.act { moveBlock(b, delta) } },
+                        onReopen = { resume -> vm.act { reopenBlock(b.id, resume) } },
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 }
-                BlockRow(
-                    block = b,
-                    slot = slot,
-                    idealStart = ideal[b.id],
-                    part = parts[b.id],
-                    onLock = { vm.act { dao.block(b.id)?.let { saveBlock(it.copy(rigid = !it.rigid)) } } },
-                    groups = groups,
-                    canBegin = isToday,
-                    onClick = { editing = b },
-                    onBegin = { vm.act { beginBlock(b) } },
-                    onDone = { vm.act { stopTimer(complete = true) } },
-                    onMove = { delta -> vm.act { moveBlock(b, delta) } },
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
         }
 
@@ -272,7 +367,14 @@ fun PlanScreen(vm: AppViewModel) {
 
     editing?.let { b ->
         // Re-read from the list so the dialog shows the activity as it is now.
-        BlockDialog(blocks.firstOrNull { it.id == b.id && b.id != 0L } ?: b, groups, isToday, nowMin, onClose = { editing = null }, vm = vm)
+        BlockDialog(
+            blocks.firstOrNull { it.id == b.id && b.id != 0L } ?: b, groups, isToday, nowMin,
+            alertAll = settings.alertAtEnd, onClose = { editing = null }, vm = vm,
+        )
+    }
+    if (loadingTemplate) LoadTemplateDialog(templates, onClose = { loadingTemplate = false }, vm = vm, day = day)
+    if (savingTemplate) SaveTemplateDialog(templates, suggested, weekdayBit, onClose = { savingTemplate = false }) { name, mask ->
+        vm.act { saveTemplate(day, name, mask); vm.say("Saved as \"$name\"") }
     }
     if (pickingTasks) TaskPicker(tasks, day, onClose = { pickingTasks = false }) { chosen ->
         vm.act { addTasksToPlan(day, chosen) }
@@ -285,6 +387,7 @@ private fun BlockRow(
     slot: PlanEngine.Slot,
     idealStart: Int?,
     part: String?,
+    steps: String?,
     onLock: () -> Unit,
     groups: List<GroupEntity>,
     canBegin: Boolean,
@@ -292,7 +395,9 @@ private fun BlockRow(
     onBegin: () -> Unit,
     onDone: () -> Unit,
     onMove: (Int) -> Unit,
+    onReopen: (Boolean) -> Unit,
 ) {
+    var undoMenu by remember { mutableStateOf(false) }
     val done = slot.state == PlanEngine.State.DONE
     val running = slot.state == PlanEngine.State.RUNNING
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -333,6 +438,8 @@ private fun BlockRow(
             val notes = buildList {
                 if (block.fixedStart != null) add("Fixed ${NlParser.formatClock(block.fixedStart)}")
                 if (part != null) add(part)
+                if (steps != null) add(steps)
+                if (block.adhoc) add("unplanned")
                 if (block.rigid) add("Locked length")
                 if (slot.compressed) add("wanted ${NlParser.formatDuration(block.desiredMin)}")
                 if (done) add("planned ${NlParser.formatDuration(block.desiredMin)}")
@@ -345,10 +452,18 @@ private fun BlockRow(
             }
         }
         when {
-            done -> Icon(
-                Icons.Default.Check, contentDescription = "Finished",
-                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 12.dp),
-            )
+            // Finished by mistake? The tick opens a way back.
+            done -> Box {
+                IconButton(onClick = { undoMenu = true }) {
+                    Icon(Icons.Default.Check, contentDescription = "Finished — tap to undo", tint = MaterialTheme.colorScheme.primary)
+                }
+                DropdownMenu(expanded = undoMenu, onDismissRequest = { undoMenu = false }) {
+                    if (canBegin) {
+                        DropdownMenuItem(text = { Text("Not finished — still running") }, onClick = { undoMenu = false; onReopen(true) })
+                    }
+                    DropdownMenuItem(text = { Text("Not started") }, onClick = { undoMenu = false; onReopen(false) })
+                }
+            }
             running -> Button(onClick = onDone, modifier = Modifier.padding(end = 8.dp)) { Text("Done") }
             else -> {
                 // Locked: this activity keeps its length and the others adjust around it.
@@ -385,10 +500,12 @@ private fun BlockDialog(
     groups: List<GroupEntity>,
     isToday: Boolean,
     nowMin: Int?,
+    alertAll: Boolean,
     onClose: () -> Unit,
     vm: AppViewModel,
 ) {
     val isNew = block.id == 0L
+    var alarm by remember { mutableStateOf(block.alarm) }
     val started = block.actualStart != null
     var title by remember { mutableStateOf(block.title) }
     var length by remember { mutableStateOf(NlParser.formatDuration(block.desiredMin)) }
@@ -440,6 +557,19 @@ private fun BlockDialog(
                     }
                     Switch(rigid, { rigid = it })
                 }
+                if (!alertAll) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Alert when time is up")
+                            Text(
+                                "A notification when this activity's planned time ends",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(alarm, { alarm = it })
+                    }
+                }
                 GroupChips(groups, groupId, "No group") { groupId = it }
 
                 if (!isNew) {
@@ -469,7 +599,14 @@ private fun BlockDialog(
                             Text("sessions", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    TextButton(onClick = { vm.act { deleteBlock(block) }; onClose() }) { Text("Delete") }
+                    Row {
+                        TextButton(onClick = { vm.act { deleteBlock(block) }; onClose() }) { Text("Delete") }
+                        if (started) {
+                            TextButton(onClick = { vm.act { reopenBlock(block.id, resume = false) }; onClose() }) {
+                                Text("Mark not started")
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -479,7 +616,7 @@ private fun BlockDialog(
                 onClick = {
                     val edited = block.copy(
                         title = title.trim(), desiredMin = lengthMin ?: block.desiredMin,
-                        fixedStart = fixedMin, rigid = rigid, groupId = groupId,
+                        fixedStart = fixedMin, rigid = rigid, groupId = groupId, alarm = alarm,
                     )
                     val timesChanged = begun != begunText || ended != endedText
                     vm.act {
@@ -512,7 +649,7 @@ private fun BlockDialog(
 @Composable
 private fun TaskPicker(tasks: List<Task>, day: Long, onClose: () -> Unit, onAdd: (List<Task>) -> Unit) {
     val candidates = remember(tasks, day) {
-        val open = tasks.filter { !it.done && !it.someday }
+        val open = tasks.filter { !it.done && !it.someday && it.parentId == null }
         open.filter { it.dueDay != null && it.dueDay <= day } +
             open.filter { it.dueDay == null } +
             open.filter { it.dueDay != null && it.dueDay > day && it.dueDay <= day + 7 }
@@ -557,6 +694,93 @@ private fun TaskPicker(tasks: List<Task>, day: Long, onClose: () -> Unit, onAdd:
                 onAdd(candidates.filter { it.id in chosen })
                 onClose()
             }) { Text("Add ${chosen.size}") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
+}
+
+
+/** Pick one of the saved day templates to add to the plan; the bin removes a template. */
+@Composable
+private fun LoadTemplateDialog(templates: List<Template>, onClose: () -> Unit, vm: AppViewModel, day: Long) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Load template") },
+        text = {
+            if (templates.isEmpty()) {
+                Text("No templates yet. Build a day you like, then choose \"Save as template…\" — for example one for weekdays and one for weekends.")
+            } else {
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(templates, key = { it.id }) { t ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.act { vm.say("Added ${loadTemplate(day, t)} activities from \"${t.name}\"") }
+                                    onClose()
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                                Text(t.name)
+                                val days = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                                    .filterIndexed { i, _ -> t.daysMask and (1 shl i) != 0 }
+                                if (days.isNotEmpty()) {
+                                    Text(
+                                        days.joinToString(" "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            IconButton(onClick = { vm.act { deleteTemplate(t) } }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete template ${t.name}")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
+}
+
+/** Save the day's plan under a name, optionally tied to weekdays it should be offered on. */
+@Composable
+private fun SaveTemplateDialog(
+    templates: List<Template>,
+    suggested: Template?,
+    weekdayBit: Int,
+    onClose: () -> Unit,
+    onSave: (String, Int) -> Unit,
+) {
+    var name by remember { mutableStateOf(suggested?.name ?: "") }
+    var mask by remember { mutableStateOf(suggested?.daysMask ?: weekdayBit) }
+    val replaces = templates.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Save as template") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    name, { name = it }, label = { Text("Name") }, singleLine = true,
+                    placeholder = { Text("Weekday") },
+                    supportingText = { Text(if (replaces != null) "Replaces the existing \"${replaces.name}\"" else "A new template") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (templates.isNotEmpty()) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        templates.forEach { t ->
+                            AssistChip(onClick = { name = t.name; mask = t.daysMask }, label = { Text(t.name) })
+                        }
+                    }
+                }
+                Text("Offer it on an empty plan on:", style = MaterialTheme.typography.bodySmall)
+                DayChips(mask) { mask = it }
+            }
+        },
+        confirmButton = {
+            Button(enabled = name.isNotBlank(), onClick = { onSave(name.trim(), mask); onClose() }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
     )

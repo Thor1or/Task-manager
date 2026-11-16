@@ -30,6 +30,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val habits = dao.habits().state(emptyList())
     val checks = dao.checks().state(emptyList())
     val running = dao.running().state(null)
+    val templates = dao.templates().state(emptyList())
 
     /** The day shown on the Plan tab, as an epoch day. */
     val planDay = MutableStateFlow(LocalDate.now().toEpochDay())
@@ -37,9 +38,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var lastToday = planDay.value
     val blocks = planDay.flatMapLatest { dao.blocks(it) }.state(emptyList())
 
-    /** Tracked time and finished plan activities from the last five weeks, for the statistics. */
-    val entries = dao.entriesSince(System.currentTimeMillis() - 35L * 86_400_000).state(emptyList())
-    val finishedBlocks = dao.finishedBlocksSince(LocalDate.now().toEpochDay() - 35).state(emptyList())
+    /** Tracked time and finished plan activities from the last three months, for the statistics. */
+    val entries = dao.entriesSince(System.currentTimeMillis() - 92L * 86_400_000).state(emptyList())
+    val finishedBlocks = dao.finishedBlocksSince(LocalDate.now().toEpochDay() - 92).state(emptyList())
 
     /** Short messages for the snackbar. */
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 4)

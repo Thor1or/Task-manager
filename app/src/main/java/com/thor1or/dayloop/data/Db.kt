@@ -33,7 +33,10 @@ interface AppDao {
     @Query("SELECT * FROM tasks WHERE id = :id") suspend fun task(id: Long): Task?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putTask(t: Task): Long
     @Query("DELETE FROM tasks WHERE id = :id") suspend fun deleteTask(id: Long)
-    @Query("DELETE FROM tasks WHERE done = 1") suspend fun deleteDoneTasks()
+    @Query("DELETE FROM tasks WHERE done = 1 AND (parentId IS NULL OR parentId IN (SELECT id FROM tasks WHERE done = 1))")
+    suspend fun deleteDoneTasks()
+    @Query("SELECT * FROM tasks WHERE parentId = :parentId ORDER BY id") suspend fun subtasks(parentId: Long): List<Task>
+    @Query("DELETE FROM tasks WHERE parentId = :parentId") suspend fun deleteSubtasks(parentId: Long)
 
     // Habits
     @Query("SELECT * FROM habits WHERE archived = 0 ORDER BY reminderMinute IS NULL, reminderMinute, id")
@@ -81,6 +84,13 @@ interface AppDao {
     @Query("DELETE FROM plan_blocks WHERE id = :id") suspend fun deleteBlock(id: Long)
     @Query("DELETE FROM plan_blocks WHERE day = :day") suspend fun deleteBlocks(day: Long)
 
+    // Templates
+    @Query("SELECT * FROM templates ORDER BY name") fun templates(): Flow<List<Template>>
+    @Query("SELECT * FROM templates ORDER BY name") suspend fun templatesNow(): List<Template>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putTemplate(t: Template): Long
+    @Query("DELETE FROM templates WHERE id = :id") suspend fun deleteTemplate(id: Long)
+    @Query("DELETE FROM templates") suspend fun wipeTemplates()
+
     // Restore
     @Query("DELETE FROM groups") suspend fun wipeGroups()
     @Query("DELETE FROM tasks") suspend fun wipeTasks()
@@ -91,8 +101,11 @@ interface AppDao {
 }
 
 @Database(
-    entities = [GroupEntity::class, Task::class, Habit::class, HabitCheck::class, TimeEntry::class, PlanBlock::class],
-    version = 2,
+    entities = [
+        GroupEntity::class, Task::class, Habit::class, HabitCheck::class, TimeEntry::class, PlanBlock::class,
+        Template::class,
+    ],
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDb : RoomDatabase() {
@@ -107,9 +120,28 @@ abstract class AppDb : RoomDatabase() {
             }
         }
 
+        /** Version 3 adds subtasks, sleep entries, end-of-activity alerts and named templates. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tasks ADD COLUMN parentId INTEGER")
+                db.execSQL("ALTER TABLE time_entries ADD COLUMN sleep INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE plan_blocks ADD COLUMN alarm INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE plan_blocks ADD COLUMN adhoc INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `templates` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `daysMask` INTEGER NOT NULL)"
+                )
+                // The single template of earlier versions was kept on day -1: it becomes template 1.
+                db.execSQL(
+                    "INSERT INTO templates (id, name, daysMask) " +
+                        "SELECT 1, 'My day', 0 WHERE EXISTS (SELECT 1 FROM plan_blocks WHERE day = -1)"
+                )
+            }
+        }
+
         fun open(context: Context, name: String = "dayloop.db"): AppDb =
             Room.databaseBuilder(context.applicationContext, AppDb::class.java, name)
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
     }
 }

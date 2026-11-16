@@ -40,6 +40,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thor1or.dayloop.data.GroupEntity
 import com.thor1or.dayloop.data.Task
@@ -67,7 +79,10 @@ fun TasksScreen(vm: AppViewModel) {
         NlParser.parse(input, today, LocalTime.now(), settings.dateOrder)
     }
 
-    val tasks = all.filter { filter == null || it.groupId == filter }
+    // Subtasks ("steps") are shown under their task, not as tasks of their own.
+    val steps = remember(all) { all.filter { it.parentId != null }.groupBy { it.parentId!! } }
+    var expanded by remember { mutableStateOf(setOf<Long>()) }
+    val tasks = all.filter { it.parentId == null && (filter == null || it.groupId == filter) }
     val open = tasks.filter { !it.done }
     val sections = listOf(
         "Overdue" to open.filter { !it.someday && it.dueDay != null && it.dueDay < day },
@@ -103,10 +118,16 @@ fun TasksScreen(vm: AppViewModel) {
                         }
                     }
                     items(list, key = { it.id }) { t ->
-                        TaskRow(t, groups, day, showDate = name != "Today" && name != "Tomorrow",
-                            onToggle = { vm.act { setTaskDone(t.id, !t.done) } },
-                            onStart = { vm.act { startTimer(t.title, taskId = t.id, groupId = t.groupId) } },
-                            onClick = { editing = t })
+                        val mine = steps[t.id].orEmpty()
+                        Column {
+                            TaskRow(t, groups, day, showDate = name != "Today" && name != "Tomorrow",
+                                steps = mine, open = t.id in expanded,
+                                onExpand = { expanded = if (t.id in expanded) expanded - t.id else expanded + t.id },
+                                onToggle = { vm.act { setTaskDone(t.id, !t.done) } },
+                                onStart = { vm.act { startTimer(t.title, taskId = t.id, groupId = t.groupId) } },
+                                onClick = { editing = t })
+                            if (t.id in expanded) StepList(t, mine, vm)
+                        }
                     }
                 }
             }
@@ -120,6 +141,7 @@ fun TasksScreen(vm: AppViewModel) {
                 if (showDone) {
                     items(done, key = { it.id }) { t ->
                         TaskRow(t, groups, day, showDate = true,
+                            steps = steps[t.id].orEmpty(), open = false, onExpand = null,
                             onToggle = { vm.act { setTaskDone(t.id, !t.done) } },
                             onStart = null,
                             onClick = { editing = t })
@@ -144,7 +166,9 @@ fun TasksScreen(vm: AppViewModel) {
         }
     }
 
-    editing?.let { TaskDialog(it, groups, settings.dateOrder, today, vm) { editing = null } }
+    editing?.let { t ->
+        TaskDialog(t, steps[t.id].orEmpty(), groups, settings.dateOrder, today, vm) { editing = null }
+    }
 }
 
 @Composable
@@ -153,6 +177,9 @@ private fun TaskRow(
     groups: List<GroupEntity>,
     today: Long,
     showDate: Boolean,
+    steps: List<Task>,
+    open: Boolean,
+    onExpand: (() -> Unit)?,
     onToggle: () -> Unit,
     onStart: (() -> Unit)?,
     onClick: () -> Unit,
@@ -202,6 +229,16 @@ private fun TaskRow(
                 }
             }
         }
+        if (steps.isNotEmpty() && onExpand != null) {
+            // Steps done out of all, and a way to unfold them.
+            TextButton(onClick = onExpand, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text("${steps.count { it.done }}/${steps.size}")
+                Icon(
+                    if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (open) "Hide steps" else "Show steps",
+                )
+            }
+        }
         if (onStart != null) {
             IconButton(onClick = onStart) {
                 Icon(Icons.Default.PlayArrow, contentDescription = "Start timer")
@@ -210,9 +247,56 @@ private fun TaskRow(
     }
 }
 
+/** The steps of one task: tick them off, remove them, add another. Ticking the last one finishes the task. */
+@Composable
+private fun StepList(task: Task, steps: List<Task>, vm: AppViewModel, modifier: Modifier = Modifier.padding(start = 40.dp)) {
+    var text by remember(task.id) { mutableStateOf("") }
+    fun add() {
+        val title = text.trim()
+        if (title.isNotEmpty()) vm.act { addSubtask(task.id, title) }
+        text = ""
+    }
+    Column(modifier) {
+        steps.forEach { s ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = s.done, onCheckedChange = { on -> vm.act { setTaskDone(s.id, on) } })
+                Text(
+                    s.title,
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    textDecoration = if (s.done) TextDecoration.LineThrough else null,
+                    color = if (s.done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                )
+                IconButton(onClick = { vm.act { deleteTask(s.id) } }) {
+                    Icon(
+                        Icons.Default.Close, contentDescription = "Remove step ${s.title}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            singleLine = true,
+            placeholder = { Text("Add a step") },
+            textStyle = MaterialTheme.typography.bodyMedium,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { add() }),
+            trailingIcon = {
+                IconButton(onClick = { add() }, enabled = text.isNotBlank()) {
+                    Icon(Icons.Default.Add, contentDescription = "Add step")
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 12.dp, bottom = 8.dp),
+        )
+    }
+}
+
 @Composable
 private fun TaskDialog(
     task: Task,
+    steps: List<Task>,
     groups: List<GroupEntity>,
     order: DateOrder,
     today: LocalDate,
@@ -239,7 +323,10 @@ private fun TaskDialog(
         onDismissRequest = onClose,
         title = { Text("Task") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
                     whenText, { whenText = it },
@@ -267,6 +354,8 @@ private fun TaskDialog(
                         )
                     }
                 }
+                Text("Steps", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                StepList(task, steps, vm, Modifier)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Someday", Modifier.weight(1f))
                     Switch(someday, { someday = it })
@@ -286,7 +375,11 @@ private fun TaskDialog(
                         durationMin = schedule.durationMin,
                         recurrence = schedule.recurrence?.encode(),
                     )
-                    vm.act { saveTask(edited) }
+                    vm.act {
+                        // Ticking the last step may have finished the task while this was open.
+                        val current = dao.task(task.id)
+                        saveTask(edited.copy(done = current?.done ?: edited.done, doneAt = current?.doneAt ?: edited.doneAt, recurrence = if (current != null && current.done && !task.done) current.recurrence else edited.recurrence))
+                    }
                     onClose()
                 },
             ) { Text("Save") }

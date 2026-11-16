@@ -38,6 +38,7 @@ class AlarmReceiver : BroadcastReceiver() {
                     }
                     repo.reminders.habit(h)
                 }
+                "blockend" -> repo.dao.runningNow()?.takeIf { it.blockId == id }?.let { Notifications.showTimeUp(context, it) }
                 "morning", "evening" -> {
                     Notifications.showPrompt(context, kind == "morning")
                     repo.reminders.prompts(repo.prefs.settings.value)
@@ -58,6 +59,7 @@ class ActionReceiver : BroadcastReceiver() {
             when (kind) {
                 "task" -> Notifications.cancel(context, Notifications.taskNotificationId(id))
                 "habit" -> Notifications.cancel(context, Notifications.habitNotificationId(id))
+                "timer" -> Notifications.cancel(context, Notifications.TIME_UP_ID)
             }
             when (action) {
                 Notifications.ACTION_STOP_TIMER -> repo.stopTimer(complete = false)
@@ -65,6 +67,7 @@ class ActionReceiver : BroadcastReceiver() {
                 Notifications.ACTION_DONE -> when (kind) {
                     "task" -> repo.setTaskDone(id, true)
                     "habit" -> repo.setHabitChecked(id, LocalDate.now().toEpochDay(), true)
+                    "timer" -> repo.stopTimer(complete = true)
                 }
                 Notifications.ACTION_START -> when (kind) {
                     "task" -> repo.dao.task(id)?.let { repo.startTimer(it.title, taskId = it.id, groupId = it.groupId) }

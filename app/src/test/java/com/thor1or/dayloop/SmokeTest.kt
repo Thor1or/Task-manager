@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -120,6 +121,11 @@ class SmokeTest {
         repo.addTask(parse("Renew passport in 3 days p2"))
         repo.addTask(parse("Idea: trip to the coast"))
         repo.addTask(parse("Water plants every mon, thu #home"))
+        val report = repo.dao.tasksNow().first { it.title == "Write quarterly report" }.id
+        repo.addSubtask(report, "Collect the figures")
+        repo.addSubtask(report, "Draft the summary")
+        repo.addSubtask(report, "Send for review")
+        repo.setTaskDone(repo.dao.subtasks(report).first().id, true)
         val overdue = repo.addTask(parse("Reply to landlord"))
         repo.saveTask(repo.dao.task(overdue)!!.copy(dueDay = day - 2))
 
@@ -138,6 +144,20 @@ class SmokeTest {
         repo.addBlock(PlanBlock(day = day, position = 0, title = "Deep work", groupId = work, desiredMin = 180))
         repo.addBlock(PlanBlock(day = day, position = 0, title = "Lunch", desiredMin = 45, fixedStart = 12 * 60 + 30, rigid = true))
         repo.addBlock(PlanBlock(day = day, position = 0, title = "Email and admin", groupId = work, desiredMin = 40))
+
+        repo.saveTemplate(day, "Weekday", 0b0011111)
+
+        // Three weeks of history for the statistics: work sessions, habit time and nights of sleep.
+        val midnight = today.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        for (d in 1..21L) {
+            val base = midnight - d * 86_400_000L
+            val long = 60 + (d * 37 % 90)
+            repo.saveEntry(TimeEntry(title = "Deep work", groupId = work, startMs = base + 9 * 3_600_000L, endMs = base + 9 * 3_600_000L + long * 60_000L))
+            if (d % 2 == 0L) repo.saveEntry(TimeEntry(title = "Run", habitId = run, groupId = health, startMs = base + 18 * 3_600_000L, endMs = base + 18 * 3_600_000L + (30 + d) * 60_000L))
+            repo.saveEntry(TimeEntry(title = "Read", habitId = read, groupId = home, startMs = base + 21 * 3_600_000L, endMs = base + 21 * 3_600_000L + 25 * 60_000L))
+            val bed = base + 23 * 3_600_000L + (d * 13 % 50) * 60_000L
+            repo.saveEntry(TimeEntry(title = "Sleep", sleep = true, startMs = bed, endMs = bed + (400 + d * 29 % 110) * 60_000L))
+        }
 
         val start = System.currentTimeMillis() - 3 * 3_600_000
         repo.saveEntry(TimeEntry(title = "Deep work", groupId = work, startMs = start, endMs = start + 80 * 60_000))
@@ -179,6 +199,10 @@ class SmokeTest {
         await("Add a task: buy bread at 9am on 10/12")
         rule.onNodeWithText("Add a task: buy bread at 9am on 10/12").performTextInput("Dentist next fri 15:00 for 1h")
         shot("4-tasks-typing")
+        // Unfold the steps of a task.
+        click("1/3")
+        shot("4b-tasks-steps")
+        click("1/3")
         val before = runBlocking { repo.dao.tasksNow() }.size
         rule.onNodeWithText("Dentist next fri 15:00 for 1h").performImeAction()
         rule.waitUntil(5_000) { runBlocking { repo.dao.tasksNow() }.size == before + 1 }
@@ -201,6 +225,12 @@ class SmokeTest {
         click("Review")
         await("By group")
         shot("8-review")
+        // Scrolling waits for frames, so the clock runs by itself for a moment.
+        rule.mainClock.autoAdvance = true
+        rule.onAllNodes(androidx.compose.ui.test.hasScrollToNodeAction())[0]
+            .performScrollToNode(androidx.compose.ui.test.hasText("Against the plan"))
+        rule.mainClock.autoAdvance = false
+        shot("8b-review-more")
 
         // Settings
         click("Settings")
@@ -215,6 +245,14 @@ class SmokeTest {
         shot("12-dark-plan-blocks")
         click("Tasks")
         shot("13-dark-tasks")
+
+        // End the day with the sleep timer, then wake up.
+        click("Sleep")
+        rule.waitUntil(5_000) { runBlocking { repo.dao.runningNow() }?.sleep == true }
+        await("Wake up")
+        shot("14-sleeping")
+        click("Wake up")
+        rule.waitUntil(5_000) { runBlocking { repo.dao.runningNow() } == null }
 
         // Timer picker
         openDialog("Start a timer")

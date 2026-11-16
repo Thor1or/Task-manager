@@ -116,4 +116,14 @@ class PlanEngineTest {
         assertEquals(start, r.end)
         assertEquals(end - start, r.free)
     }
+
+    @Test fun aResumedActivityIsNotCutShortByLaterHistory() {
+        // 1 was finished, 2 was done after it, then 1 was reopened and is running again.
+        val blocks = listOf(Block(1, 120, actualStart = 480), Block(2, 30, actualStart = 520, actualEnd = 540), Block(3, 60))
+        val r = PlanEngine.compute(blocks, start, end, now = 550)
+        assertEquals(State.RUNNING, r.slots[0].state)
+        assertEquals(120, r.slots[0].length)
+        assertEquals(State.DONE, r.slots[1].state)
+        assertEquals(600, r.slots[2].start)
+    }
 }

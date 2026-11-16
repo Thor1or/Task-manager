@@ -21,10 +21,14 @@ a time gets a notification at that time, with Done, Start timer and Snooze butto
 | `standup 0830` · `dinner at 2000` | military time |
 | `pay rent tomorrow p1` | priority 1 (highest) to 4 |
 | `report #work` · `report @work` | group; typing `#` or `@` offers the existing ones |
+| `buy bread tom` · `gym wed 7am` | short day names, at the end of the line or before a time |
 | `comprar pão amanhã às 9h` | common Portuguese words work too |
 
 A bare four-digit number is read as a time unless it looks like a nearby year (`2027`), and
 priorities colour the task's checkbox and sort it first within its day.
+
+A task can have **steps** (subtasks): add them in the task's editor or under the unfolded
+task. Ticking the last step finishes the task and stops a timer running on it.
 
 Whether `10/12` means 10 December or October 12 follows the phone's settings and can be
 changed in Settings.
@@ -36,7 +40,11 @@ as two one-hour activities, and the habit is ticked once both are done.
 The Habits tab shows a GitHub-style heatmap of all habits together, and each habit has its
 own.
 
-**Timer.** A bar above the tabs starts a timer for something on today's plan, a habit, a
+**Sleep.** "Sleep" in the timer bar ends the day and starts a sleep timer; "Wake up" stops
+it. The Review tab shows the average night, usual bedtime and wake-up time.
+
+**Timer.** Anything timed that was not on today's plan is added to it as an "unplanned"
+activity, so the plan and the block view show what actually happened. A bar above the tabs starts a timer for something on today's plan, a habit, a
 task, a recent entry or free text. The running timer also shows as a notification with a
 Stop button. Entries can be renamed or put in a group afterwards on the Review tab.
 
@@ -54,12 +62,22 @@ and time entries. Typing `#name` creates a group if it does not exist.
 - **Begin** pins an activity to the current time, starts the timer for it, and lays out the
   rest of the day again — being late does not break the plan;
 - finished activities keep their real times, and the Review tab compares planned and actual
-  lengths, so recurring activities show how long they really take.
+  lengths, so recurring activities show how long they really take. Review also has tracked
+  time per day and per group, the average length of every task and habit that was timed,
+  each habit's completion rate and streaks, and sleep.
 
 Two views of the same plan, switched with **Blocks / List** at the top: the list, and a
 time-block day view like a calendar's. In the block view, hold and drag an activity to pin it
 to another time, drag its bottom edge to change its length, and tap an empty spot to add one
 there.
+
+In the list, hold a waiting activity and drag it up or down to reorder (the arrows still
+work). A finished activity's tick opens a small menu to undo it: back to running, or back to
+not started. When the planned time of the running activity is up, a notification says so
+(Settings turns this off for all; it can then be switched on per activity).
+
+Day **templates** are named and can be tied to weekdays ("Weekday" for Mon–Fri, "Weekend"
+for Sat–Sun); an empty plan offers the one for that day.
 
 Tap an activity to edit it. There you can also **split** it into 2–4 sessions that all count
 towards the same task or habit, and correct **when it really started and ended** — for when

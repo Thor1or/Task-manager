@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,25 +48,6 @@ import com.thor1or.dayloop.data.Habit
 import com.thor1or.dayloop.logic.NlParser
 import java.time.LocalDate
 import java.time.ZoneId
-
-private val DAY_LETTERS = listOf("M", "T", "W", "T", "F", "S", "S")
-
-private fun Habit.dueOn(day: Long): Boolean =
-    day >= createdDay && daysMask and (1 shl (LocalDate.ofEpochDay(day).dayOfWeek.value - 1)) != 0
-
-/** Consecutive due days ticked, counting back from today (or from yesterday if today is open). */
-private fun streak(h: Habit, checked: Set<Long>, today: Long): Int {
-    var day = today
-    var n = 0
-    if (h.dueOn(day) && day !in checked) day--
-    while (day >= h.createdDay) {
-        if (h.dueOn(day)) {
-            if (day in checked) n++ else break
-        }
-        day--
-    }
-    return n
-}
 
 @Composable
 fun HabitsScreen(vm: AppViewModel) {
@@ -145,9 +127,10 @@ fun HabitsScreen(vm: AppViewModel) {
                             color = if (due) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         val tracked = trackedToday[h.id] ?: 0
+                        val streak = currentStreak(h, checked, day)
+                        val tint = groupColor(groups, h.groupId)
                         val details = listOfNotNull(
                             "Not today".takeIf { !due },
-                            streak(h, checked, day).takeIf { it > 0 }?.let { "$it-day streak" },
                             h.reminderMinute?.let { NlParser.formatClock(it) },
                             when {
                                 h.targetMin > 0 -> "$tracked / ${h.targetMin} min"
@@ -155,14 +138,23 @@ fun HabitsScreen(vm: AppViewModel) {
                                 else -> null
                             },
                         )
-                        if (details.isNotEmpty()) {
+                        if (details.isNotEmpty() || streak > 0) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (h.groupId != null) {
-                                    Dot(groupColor(groups, h.groupId), 8.dp)
+                                    Dot(tint, 8.dp)
                                     Spacer(Modifier.width(6.dp))
                                 }
+                                if (streak > 0) {
+                                    // The streak wears the colour of the habit's group.
+                                    Text(
+                                        "$streak-day streak",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = tint ?: MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                                 Text(
-                                    details.joinToString(" · "),
+                                    (if (streak > 0 && details.isNotEmpty()) " · " else "") + details.joinToString(" · "),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -237,16 +229,7 @@ private fun HabitDialog(
                     }
                 }
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    DAY_LETTERS.forEachIndexed { i, letter ->
-                        FilterChip(
-                            selected = mask and (1 shl i) != 0,
-                            onClick = { mask = mask xor (1 shl i) },
-                            label = { Text(letter) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
+                DayChips(mask) { mask = it }
                 OutlinedTextField(
                     reminder, { reminder = it }, label = { Text("Reminder time") }, singleLine = true,
                     placeholder = { Text("none — e.g. 7:30am") }, isError = !reminderOk, modifier = Modifier.fillMaxWidth(),

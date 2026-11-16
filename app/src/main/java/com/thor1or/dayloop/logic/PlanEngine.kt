@@ -59,12 +59,11 @@ object PlanEngine {
      */
     fun compute(blocks: List<Block>, dayStart: Int, dayEnd: Int, now: Int? = null): Result {
         val floor = now ?: Int.MIN_VALUE
-        val slots = ArrayList<Slot>(blocks.size)
-        var cursor = dayStart
+        // Slots are collected per block and put back in the given order at the end.
+        val placed = HashMap<Long, Slot>(blocks.size * 2)
         var overflow = false
         var wanted = 0
         var given = 0
-        var i = 0
 
         fun state(b: Block) = when {
             b.actualStart != null && b.actualEnd != null -> State.DONE
@@ -72,18 +71,21 @@ object PlanEngine {
             else -> State.PENDING
         }
 
-        fun gap(start: Int) = if (slots.isEmpty()) 0 else max(0, start - slots.last().end)
+        // Finished activities are history: they sit at their real times and take no part in
+        // the scheduling of the rest, wherever they are in the list.
+        var cursor = dayStart
+        for (b in blocks) {
+            if (state(b) != State.DONE) continue
+            val s = b.actualStart!!
+            placed[b.id] = Slot(b.id, s, max(0, b.actualEnd!! - s), State.DONE, 0, false, false)
+            cursor = max(cursor, b.actualEnd)
+        }
 
-        while (i < blocks.size) {
-            val head = blocks[i]
+        val open = blocks.filter { state(it) != State.DONE }
+        var i = 0
+        while (i < open.size) {
+            val head = open[i]
             val headState = state(head)
-            if (headState == State.DONE) {
-                val s = head.actualStart!!
-                slots += Slot(head.id, s, max(0, head.actualEnd!! - s), State.DONE, gap(s), false, false)
-                cursor = max(cursor, head.actualEnd)
-                i++
-                continue
-            }
 
             // A run: one anchor (running, fixed, or simply the next in line) followed by
             // every pending activity without a fixed start.
@@ -93,13 +95,13 @@ object PlanEngine {
                 else -> max(cursor, floor)
             }
             var j = i + 1
-            while (j < blocks.size && state(blocks[j]) == State.PENDING && blocks[j].fixedStart == null) j++
-            val runEnd = if (j < blocks.size) {
-                val n = blocks[j]
+            while (j < open.size && state(open[j]) == State.PENDING && open[j].fixedStart == null) j++
+            val runEnd = if (j < open.size) {
+                val n = open[j]
                 n.actualStart ?: max(n.fixedStart!!, floor)
             } else dayEnd
             val available = max(0, runEnd - runStart)
-            val run = blocks.subList(i, j)
+            val run = open.subList(i, j)
 
             // Minimum lengths: rigid activities keep theirs; a running one cannot be shorter
             // than the time already spent on it.
@@ -135,12 +137,12 @@ object PlanEngine {
                 exact += len
                 val end = max(at, exact.roundToInt())
                 val st = if (k == 0) headState else State.PENDING
-                slots += Slot(
+                placed[b.id] = Slot(
                     id = b.id,
                     start = at,
                     length = end - at,
                     state = st,
-                    gapBefore = gap(at),
+                    gapBefore = 0,
                     compressed = !locked[k] && ratio < 0.999,
                     pushed = st == State.PENDING && b.fixedStart != null && at > b.fixedStart,
                 )
@@ -152,6 +154,13 @@ object PlanEngine {
             }
             cursor = max(cursor, at)
             i = j
+        }
+
+        // Back in list order, with the free time in front of each activity.
+        val slots = ArrayList<Slot>(blocks.size)
+        for (b in blocks) {
+            val s = placed[b.id] ?: continue
+            slots += if (slots.isEmpty()) s else s.copy(gapBefore = max(0, s.start - slots.maxOf { it.end }))
         }
 
         val end = slots.maxOfOrNull { it.end } ?: dayStart

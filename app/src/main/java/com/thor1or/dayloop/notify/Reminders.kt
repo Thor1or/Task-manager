@@ -93,6 +93,22 @@ class Reminders(private val context: Context) {
         set(at, pi)
     }
 
+    private fun blockEndIntent(blockId: Long): PendingIntent = PendingIntent.getBroadcast(
+        context, 0,
+        Intent(context, AlarmReceiver::class.java)
+            .setData(Uri.parse("dayloop://alarm/blockend"))
+            .putExtra("kind", "blockend")
+            .putExtra("id", blockId),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    /** One alert for the running activity: the moment its planned time is up. */
+    fun blockEnd(atMs: Long, blockId: Long) = set(
+        LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(atMs), ZoneId.systemDefault()), blockEndIntent(blockId),
+    )
+
+    fun cancelBlockEnd() = am.cancel(blockEndIntent(0))
+
     fun snooze(kind: String, id: Long, minutes: Long = 10) =
         set(LocalDateTime.now().plusMinutes(minutes), intent(kind, id, snooze = true))
 }
