@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.Folio" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27" xmlns:tools="http://schemas.android.com/tools">shortEdges</item>
+        <item name="android:windowBackground">#F5F4F0</item>
+    </style>
+</resources>

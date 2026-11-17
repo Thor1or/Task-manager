@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- An open folio: two leaves meeting at a spine, with a bookmark ribbon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,38q12,-5 23,1v36q-11,-6 -23,-1z" />
+    <path
+        android:fillColor="#E3E6FA"
+        android:pathData="M78,38q-12,-5 -23,1v36q11,-6 23,-1z" />
+    <path
+        android:fillColor="#FFB74D"
+        android:pathData="M64,36h7v17l-3.5,-3l-3.5,3z" />
+</vector>

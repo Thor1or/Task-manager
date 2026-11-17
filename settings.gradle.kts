@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Jotter"
 include(":app")
+include(":folio")
